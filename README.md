@@ -1,145 +1,169 @@
-# Mario Kart Elo — Supabase Setup
+# Mario Kart Elo
+
+A friend-group Mario Kart Grand Prix tracker with a chess-style Elo rating
+per player. See `PLAN.md` for the full design.
+
+## Quick Commands
+
+Everything needed to run the app and check any change, in one place —
+no digging through the Supabase SQL below. All commands run from inside
+`web/` unless noted otherwise.
+
+**One-time setup**
+
+Install dependencies:
+
+```bash
+cd web
+npm install
+```
+
+Create your local env file:
+
+```bash
+cp .env.example .env
+```
+
+Then open `web/.env` and fill in your Supabase project's URL and anon key
+(dashboard → Project Settings → API). `.env` is gitignored — never commit
+real keys, though the anon key is meant to be public anyway (see
+`PLAN.md` §1).
+
+**Run it**
+
+```bash
+npm run dev
+```
+
+Then open the printed `localhost` URL in a browser.
+
+**Check the code**
+
+Type-check without building:
+
+```bash
+npx tsc --noEmit
+```
+
+Static analysis (unused vars, hook rule violations, etc.):
+
+```bash
+npm run lint
+```
+
+Run unit tests (currently just `elo.ts` — the pure Elo algorithm):
+
+```bash
+npm run test
+```
+
+Production build, outputs to `web/dist/`:
+
+```bash
+npm run build
+```
+
+Serve that production build locally — different from `npm run dev`'s
+dev-mode server; catches anything that only breaks in the built output,
+e.g. the `/MarioKartELO/` base path:
+
+```bash
+npm run preview
+```
+
+**Check it in the browser** (manual — the commands above only catch what
+compiles/lints cleanly, not whether it actually looks/works right)
+
+1. `npm run dev`, open the printed `localhost` URL.
+2. Click through all the nav links (currently: Leaderboard `/`, Analytics
+   `/analytics`, Submit GP `/submit`) — each should load and highlight
+   the active tab.
+3. Open the browser DevTools console (F12) and confirm there are no red
+   errors — Vite's HMR connect messages and React's DevTools notice are
+   normal and fine to ignore.
+
+Supabase-specific checks (need the SQL setup below run first) are in
+**Verifying Everything Works** further down.
+
+## Supabase Setup
 
 This is the one-time SQL setup for the Supabase project, matching the
-design in `PLAN.md`. Paste each block into the Supabase dashboard's
-**SQL Editor** and run it, in order.
+design in `PLAN.md`. The actual SQL lives in the repo, not here:
 
-## 1. Schema, view, RLS, and write-access functions
+1. **`supabase/migrations/0001_init.sql`** — run once on a **fresh**
+   Supabase project, in the dashboard's SQL Editor. Creates all four tables,
+   the `player_stats` view, enables Row Level Security with public-read-only
+   policies, creates the password-gated functions (`submit_gp`,
+   `void_last_gp`, `add_player`) that are the only way to write data, and
+   adds `players` to the `supabase_realtime` publication so the Leaderboard
+   page's live subscription actually receives updates.
 
-Run this once on a fresh Supabase project. It creates all four tables, the
-`player_stats` view, enables Row Level Security with public-read-only
-policies, and creates the two password-gated functions that are the only
-way to write data.
+   Already have a database from an earlier version of this file? The
+   `create table` statements will error on a table that already exists —
+   skip those and paste just the `create extension`, the three
+   `create or replace function` blocks, and the `grant execute` lines. Safe
+   to run more than once.
+2. **`supabase/set_password.sql`** — run separately, after step 1. Open
+   the file, replace `REPLACE_WITH_YOUR_PASSWORD` with your actual chosen
+   password *in the SQL Editor only* (never commit that
+   edit — the file in the repo should always keep the placeholder), then
+   run it. This is
+   also how you change the password later: re-run it with a new value.
 
-```sql
-create extension if not exists pgcrypto;
+## Deployment (GitHub Pages)
 
-create table players (
-  id            uuid primary key default gen_random_uuid(),
-  name          text unique not null,
-  elo           numeric not null default 1500,
-  gp_count      int not null default 0,
-  created_at    timestamptz not null default now()
-);
+`.github/workflows/deploy.yml` builds `web/` and publishes it to GitHub
+Pages on every push to `main` (or manually from the Actions tab). Three
+one-time setup steps before the first deploy works:
 
-create table grand_prix (
-  id            uuid primary key default gen_random_uuid(),
-  played_at     timestamptz not null default now(),
-  label         text,
-  created_at    timestamptz not null default now()
-);
+1. **Turn on Pages**: repo Settings → Pages → Build and deployment →
+   Source → **GitHub Actions** (not "Deploy from a branch" — that skips
+   the build step, and the `.tsx` source can't be served directly).
+2. **Add the two secrets**: repo Settings → Secrets and variables →
+   Actions → New repository secret. Add `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_ANON_KEY` with the same values as your local
+   `web/.env`. Vite bakes `VITE_*` vars into the bundle at build time, so
+   without these the deployed site can't reach Supabase.
+3. **Merge to `main`**: the workflow only triggers on `main`, so work on
+   other branches won't deploy until merged.
 
-create table gp_results (
-  id            uuid primary key default gen_random_uuid(),
-  grand_prix_id uuid not null references grand_prix(id) on delete cascade,
-  player_id     uuid not null references players(id),
-  points        int not null check (points between 4 and 60),
-  elo_before    numeric not null,
-  elo_after     numeric not null,
-  elo_delta     numeric not null,
-  unique (grand_prix_id, player_id)
-);
+The live site will be at `https://<username>.github.io/<repo-name>/` —
+this must match the `base` in `web/vite.config.ts` (currently
+`/MarioKartELO/`) or every asset 404s.
 
-create table site_secret (
-  id            int primary key default 1 check (id = 1),
-  password_hash text not null
-);
+The workflow runs `tsc --noEmit`, `npm run lint`, and `npm run test`
+before building, so a type error, lint error, or failing test blocks the
+deploy rather than shipping broken output.
 
-create view player_stats as
-select
-  p.id, p.name, p.elo, p.gp_count,
-  coalesce(sum(r.points), 0)                                 as total_points,
-  coalesce(sum(r.points), 0)::numeric / nullif(p.gp_count, 0) as avg_points
-from players p
-left join gp_results r on r.player_id = p.id
-where p.gp_count > 0
-group by p.id;
+## Verifying Everything Works
 
-alter table players     enable row level security;
-alter table grand_prix  enable row level security;
-alter table gp_results  enable row level security;
-alter table site_secret enable row level security;
+Supabase-specific checks — see **Quick Commands** above for the web app
+and git checks. This section grows as more gets built. Do each of these
+in the dashboard's SQL Editor, after running the setup above (exact
+queries aren't repeated here — write them ad hoc, they're one-liners
+against `site_secret`/`players`):
 
-create policy "public read players"    on players    for select to anon using (true);
-create policy "public read grand_prix" on grand_prix for select to anon using (true);
-create policy "public read gp_results" on gp_results for select to anon using (true);
--- site_secret gets no policy at all: no one can select/insert/update it directly,
--- not even anon reading it, only the functions below (they bypass RLS as the table owner).
-
-grant select on players, grand_prix, gp_results, player_stats to anon;
-
-create or replace function submit_gp(password text, gp_label text, results jsonb)
-returns uuid
-language plpgsql
-security definer
-as $$
-declare
-  new_gp_id uuid;
-  r jsonb;
-begin
-  if not exists (
-    select 1 from site_secret where password_hash = crypt(password, password_hash)
-  ) then
-    raise exception 'invalid password';
-  end if;
-
-  insert into grand_prix (label) values (gp_label) returning id into new_gp_id;
-
-  for r in select * from jsonb_array_elements(results) loop
-    insert into gp_results (grand_prix_id, player_id, points, elo_before, elo_after, elo_delta)
-    values (
-      new_gp_id,
-      (r->>'player_id')::uuid,
-      (r->>'points')::int,
-      (r->>'elo_before')::numeric,
-      (r->>'elo_after')::numeric,
-      (r->>'elo_delta')::numeric
-    );
-
-    update players
-      set elo = (r->>'elo_after')::numeric,
-          gp_count = gp_count + 1
-      where id = (r->>'player_id')::uuid;
-  end loop;
-
-  return new_gp_id;
-end;
-$$;
-
-create or replace function add_player(password text, player_name text)
-returns uuid
-language plpgsql
-security definer
-as $$
-declare
-  new_id uuid;
-begin
-  if not exists (
-    select 1 from site_secret where password_hash = crypt(password, password_hash)
-  ) then
-    raise exception 'invalid password';
-  end if;
-
-  insert into players (name) values (player_name) returning id into new_id;
-  return new_id;
-end;
-$$;
-
-grant execute on function submit_gp(text, text, jsonb) to anon;
-grant execute on function add_player(text, text) to anon;
-```
-
-## 2. Set the site password
-
-Run this separately — replace `REPLACE_WITH_YOUR_PASSWORD` with the actual
-password before running. This is also how you change the password later
-(just run it again with a new value; the `on conflict` makes it an upsert).
-
-```sql
-insert into site_secret (id, password_hash)
-values (1, crypt('REPLACE_WITH_YOUR_PASSWORD', gen_salt('bf')))
-on conflict (id) do update set password_hash = excluded.password_hash;
-```
+- Confirm the password is actually hashed, not stored as plaintext:
+  select `password_hash` from `site_secret` and check it starts with
+  `$2a$` or `$2b$` (bcrypt), never your literal password.
+- Confirm a wrong password is rejected: call `add_player` with a bogus
+  password — it should raise `invalid password` and add nothing.
+- Confirm the right password works: call `add_player` with the real
+  password — it should return a UUID and add a row to `players`. Delete
+  that test row afterward so it doesn't linger in your roster.
+- In the Table Editor: `players`, `grand_prix`, `gp_results`,
+  `site_secret` should all show a green "RLS enabled" badge (`player_stats`
+  will say "Unrestricted" instead — expected, since RLS only applies to
+  tables, not views).
+- Confirm voiding works: submit a throwaway GP from the Submit GP page,
+  note the ratings it produced, then use the "Void this grand prix" button
+  below the form. The affected players' ratings/GP counts should roll back
+  to exactly what they were before, and the GP should disappear from
+  `grand_prix`.
+- Confirm the stale-rating guard works: open Submit GP in two browser tabs,
+  submit a GP in one, then try submitting a *different* GP in the other tab
+  (which still has the old ratings loaded) — it should fail with a message
+  to refresh, not silently overwrite the first GP's rating changes.
 
 ## Notes
 

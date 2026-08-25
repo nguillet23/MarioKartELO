@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+/*
+  "Results Screen" — the moment after a grand prix ends, read on a phone.
+  Ground is a deep blue-violet (a track at night, not a neutral black), the
+  leader is coin gold, and every rating is set in a mono face so the columns
+  line up like a timing board.
+*/
+@theme {
+  --color-asphalt: #14121f;
+  --color-pit: #1c1930;
+  --color-pit-hi: #252038;
+  --color-line: #322c4a;
+  --color-chalk: #f2effc;
+  --color-haze: #948cb4;
+
+  --color-gold: #ffc42b;
+  --color-boost: #35d07f;
+  --color-spin: #ff5a47;
+
+  /* Player-marker colors, in Mario Kart's own HUD order. */
+  --color-p1: #e8402a;
+  --color-p2: #3a86f0;
+  --color-p3: #ffc42b;
+  --color-p4: #35c15f;
+
+  --font-display: "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-asphalt);
+    color: var(--color-chalk);
+    font-family: var(--font-sans);
+    /* Faint start-line glow so the ground isn't a flat field of color. */
+    background-image: radial-gradient(
+      120% 60% at 50% 0%,
+      rgb(58 134 240 / 0.1),
+      transparent 70%
+    );
+    background-repeat: no-repeat;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-gold);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* The one checkered element on the site: a hairline under each page title. */
+  .checker-rule {
+    height: 8px;
+    background: repeating-conic-gradient(
+        var(--color-line) 0% 25%,
+        transparent 0% 50%
+      )
+      0 0 / 8px 8px;
+  }
+
+  /* Signature: race-position ordinals, slanted for speed. */
+  .ordinal {
+    font-family: var(--font-display);
+    font-weight: 900;
+    font-style: italic;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+
+  .ordinal-suffix {
+    font-size: 0.55em;
+    vertical-align: 0.45em;
+    margin-left: 0.05em;
+  }
+
+  .panel {
+    background-color: var(--color-pit);
+    border: 1px solid var(--color-line);
+    border-radius: 0.75rem;
+  }
+
+  /* 16px minimum, always — anything smaller makes iOS Safari zoom on focus. */
+  .field {
+    font-size: 1rem;
+    font-family: var(--font-sans);
+    background-color: var(--color-pit-hi);
+    color: var(--color-chalk);
+    border: 1px solid var(--color-line);
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    width: 100%;
+  }
+
+  .field::placeholder {
+    color: color-mix(in srgb, var(--color-haze) 70%, transparent);
+  }
+
+  .field:focus {
+    border-color: var(--color-gold);
+  }
+
+  /* Standings settle in from the bottom, one row after another. */
+  @keyframes row-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .row-in {
+    animation: row-in 0.32s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
