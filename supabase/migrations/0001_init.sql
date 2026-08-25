@@ -118,3 +118,9 @@ $$;
 
 grant execute on function submit_gp(text, jsonb) to anon;
 grant execute on function add_player(text, text) to anon;
+
+-- Adds `players` to the supabase_realtime publication so the Leaderboard
+-- page's live subscription (PLAN.md §6.2) actually receives postgres_changes
+-- events. RLS's public SELECT policy above is necessary but not sufficient
+-- for Realtime to broadcast changes — this is the other required half.
+alter publication supabase_realtime add table players;

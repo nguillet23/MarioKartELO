@@ -93,13 +93,41 @@ design in `PLAN.md`. The actual SQL lives in the repo, not here:
 1. **`supabase/migrations/0001_init.sql`** — run once on a fresh Supabase
    project, in the dashboard's SQL Editor. Creates all four tables, the
    `player_stats` view, enables Row Level Security with public-read-only
-   policies, and creates the two password-gated functions (`submit_gp`,
-   `add_player`) that are the only way to write data.
+   policies, creates the two password-gated functions (`submit_gp`,
+   `add_player`) that are the only way to write data, and adds `players`
+   to the `supabase_realtime` publication so the Leaderboard page's live
+   subscription actually receives updates.
 2. **`supabase/set_password.sql`** — run separately, after step 1. Open
    the file, replace `REPLACE_WITH_YOUR_PASSWORD` with your actual chosen
-   password *in the SQL Editor only* (never commit that edit — the file
-   in the repo should always keep the placeholder), then run it. This is
+   password *in the SQL Editor only* (never commit that
+   edit — the file in the repo should always keep the placeholder), then
+   run it. This is
    also how you change the password later: re-run it with a new value.
+
+## Deployment (GitHub Pages)
+
+`.github/workflows/deploy.yml` builds `web/` and publishes it to GitHub
+Pages on every push to `main` (or manually from the Actions tab). Three
+one-time setup steps before the first deploy works:
+
+1. **Turn on Pages**: repo Settings → Pages → Build and deployment →
+   Source → **GitHub Actions** (not "Deploy from a branch" — that skips
+   the build step, and the `.tsx` source can't be served directly).
+2. **Add the two secrets**: repo Settings → Secrets and variables →
+   Actions → New repository secret. Add `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_ANON_KEY` with the same values as your local
+   `web/.env`. Vite bakes `VITE_*` vars into the bundle at build time, so
+   without these the deployed site can't reach Supabase.
+3. **Merge to `main`**: the workflow only triggers on `main`, so work on
+   other branches won't deploy until merged.
+
+The live site will be at `https://<username>.github.io/<repo-name>/` —
+this must match the `base` in `web/vite.config.ts` (currently
+`/MarioKartELO/`) or every asset 404s.
+
+The workflow runs `tsc --noEmit`, `npm run lint`, and `npm run test`
+before building, so a type error, lint error, or failing test blocks the
+deploy rather than shipping broken output.
 
 ## Verifying Everything Works
 
