@@ -4,9 +4,11 @@
 -- functions that are the only way to write data.
 -- See PLAN.md §4 for the design this implements.
 --
--- Already have a database created from an earlier version of this file?
--- Run supabase/migrations/0002_void_and_guard.sql instead — it applies just
--- the parts added since, without touching your existing data.
+-- Already have a database from an earlier version of this file? The
+-- `create table` statements below will error on a table that already
+-- exists — skip those and run just the `create extension`, the three
+-- `create or replace function` blocks, and the `grant execute` lines to
+-- pick up any function changes without touching your existing rows.
 
 create extension if not exists pgcrypto;
 
@@ -71,7 +73,7 @@ create or replace function submit_gp(password text, results jsonb)
 returns uuid
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
 declare
   new_gp_id uuid;
@@ -143,7 +145,7 @@ create or replace function void_last_gp(password text)
 returns uuid
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
 declare
   target_id uuid;
@@ -180,7 +182,7 @@ create or replace function add_player(password text, player_name text)
 returns uuid
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = public, extensions, pg_temp
 as $$
 declare
   new_id uuid;

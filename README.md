@@ -98,12 +98,11 @@ design in `PLAN.md`. The actual SQL lives in the repo, not here:
    adds `players` to the `supabase_realtime` publication so the Leaderboard
    page's live subscription actually receives updates.
 
-   **Already have a database from before `void_last_gp` existed?** Run
-   **`supabase/migrations/0002_void_and_guard.sql`** instead — it adds
-   `void_last_gp`, a stale-rating guard on `submit_gp` (rejects a submission
-   if someone else's GP landed in between and the ratings it was computed
-   from are now out of date), and `search_path` pinning on every function,
-   without touching your existing rows. Safe to run more than once.
+   Already have a database from an earlier version of this file? The
+   `create table` statements will error on a table that already exists —
+   skip those and paste just the `create extension`, the three
+   `create or replace function` blocks, and the `grant execute` lines. Safe
+   to run more than once.
 2. **`supabase/set_password.sql`** — run separately, after step 1. Open
    the file, replace `REPLACE_WITH_YOUR_PASSWORD` with your actual chosen
    password *in the SQL Editor only* (never commit that
