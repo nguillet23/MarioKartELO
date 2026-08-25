@@ -65,26 +65,6 @@ e.g. the `/MarioKartELO/` base path:
 npm run preview
 ```
 
-See what's staged, modified, or untracked:
-
-```bash
-git status
-```
-
-See exactly what git is tracking (e.g. confirm `PLAN.md` does *not* show
-up — intentionally excluded, kept local-only):
-
-```bash
-git ls-files
-```
-
-See which `.gitignore` line is excluding a given path, if something you
-expect to be tracked isn't (replace `<path>` with the actual path):
-
-```bash
-git check-ignore -v <path>
-```
-
 **Check it in the browser** (manual — the commands above only catch what
 compiles/lints cleanly, not whether it actually looks/works right)
 
