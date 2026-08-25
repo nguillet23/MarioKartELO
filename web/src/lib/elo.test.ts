@@ -6,15 +6,20 @@ describe('computeGpElo', () => {
     expect(() => computeGpElo([{ playerId: 'a', rating: 1500, points: 40 }])).toThrow()
   })
 
-  it('is zero-sum: every GP\'s total rating change nets to ~0', () => {
-    const updates = computeGpElo([
+  it('is zero-sum within rounding error: every GP\'s total rating change stays near 0', () => {
+    // The underlying pairwise math is exactly zero-sum, but each participant's
+    // delta is now independently rounded to a whole number (so ratings always
+    // display/store as integers), which can leave a residual of at most
+    // ~0.5 per participant once those independent roundings are summed.
+    const participants = [
       { playerId: 'a', rating: 1500, points: 60 },
       { playerId: 'b', rating: 1400, points: 30 },
       { playerId: 'c', rating: 1600, points: 45 },
       { playerId: 'd', rating: 1300, points: 4 },
-    ])
+    ]
+    const updates = computeGpElo(participants)
     const total = updates.reduce((sum, u) => sum + u.eloDelta, 0)
-    expect(total).toBeCloseTo(0, 10)
+    expect(Math.abs(total)).toBeLessThanOrEqual(participants.length / 2)
   })
 
   it('is symmetric for a 2-player GP: winner gains exactly what the loser loses', () => {
@@ -87,7 +92,7 @@ describe('computeGpElo', () => {
     const updates = computeGpElo(participants)
     expect(updates).toHaveLength(12)
     const total = updates.reduce((sum, u) => sum + u.eloDelta, 0)
-    expect(total).toBeCloseTo(0, 8)
+    expect(Math.abs(total)).toBeLessThanOrEqual(participants.length / 2)
     // Highest scorer should have the largest gain, lowest scorer the largest loss.
     expect(updates[0].eloDelta).toBeGreaterThan(updates[11].eloDelta)
   })
@@ -99,6 +104,18 @@ describe('computeGpElo', () => {
     ])
     for (const u of updates) {
       expect(u.eloAfter).toBeCloseTo(u.eloBefore + u.eloDelta, 10)
+    }
+  })
+
+  it('always rounds eloDelta and eloAfter to whole numbers', () => {
+    const updates = computeGpElo([
+      { playerId: 'a', rating: 1517, points: 37 },
+      { playerId: 'b', rating: 1483, points: 41 },
+      { playerId: 'c', rating: 1502, points: 22 },
+    ])
+    for (const u of updates) {
+      expect(Number.isInteger(u.eloDelta)).toBe(true)
+      expect(Number.isInteger(u.eloAfter)).toBe(true)
     }
   })
 })

@@ -17,7 +17,6 @@ create table players (
 create table grand_prix (
   id            uuid primary key default gen_random_uuid(),
   played_at     timestamptz not null default now(),
-  label         text,
   created_at    timestamptz not null default now()
 );
 
@@ -60,7 +59,7 @@ create policy "public read gp_results" on gp_results for select to anon using (t
 
 grant select on players, grand_prix, gp_results, player_stats to anon;
 
-create or replace function submit_gp(password text, gp_label text, results jsonb)
+create or replace function submit_gp(password text, results jsonb)
 returns uuid
 language plpgsql
 security definer
@@ -75,7 +74,7 @@ begin
     raise exception 'invalid password';
   end if;
 
-  insert into grand_prix (label) values (gp_label) returning id into new_gp_id;
+  insert into grand_prix default values returning id into new_gp_id;
 
   for r in select * from jsonb_array_elements(results) loop
     insert into gp_results (grand_prix_id, player_id, points, elo_before, elo_after, elo_delta)
@@ -117,5 +116,5 @@ begin
 end;
 $$;
 
-grant execute on function submit_gp(text, text, jsonb) to anon;
+grant execute on function submit_gp(text, jsonb) to anon;
 grant execute on function add_player(text, text) to anon;

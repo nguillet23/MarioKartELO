@@ -46,7 +46,10 @@ export function computeGpElo(
         expectedScore(player.rating, opponent.rating)
     }
 
-    const eloDelta = (k / (n - 1)) * sum
+    // Rounded to a whole number so ratings always display/store as integers
+    // (eloAfter is derived from the rounded delta, not rounded separately,
+    // so eloAfter - eloBefore === eloDelta stays exact).
+    const eloDelta = Math.round((k / (n - 1)) * sum)
 
     return {
       playerId: player.playerId,
