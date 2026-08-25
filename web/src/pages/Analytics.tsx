@@ -10,21 +10,27 @@ import {
   YAxis,
 } from 'recharts'
 import { supabase } from '../lib/supabaseClient'
+import PageHeader from '../components/PageHeader'
 
+// Mirrors the palette in index.css — Recharts sets `stroke` as an SVG
+// presentation attribute, which doesn't resolve CSS custom properties.
 const LINE_COLORS = [
-  '#2563eb',
-  '#dc2626',
-  '#16a34a',
-  '#d97706',
-  '#7c3aed',
-  '#0891b2',
-  '#db2777',
-  '#65a30d',
-  '#4338ca',
-  '#ea580c',
-  '#0d9488',
-  '#9333ea',
+  '#e8402a',
+  '#3a86f0',
+  '#ffc42b',
+  '#35c15f',
+  '#c084fc',
+  '#22d3ee',
+  '#fb7185',
+  '#a3e635',
+  '#818cf8',
+  '#fb923c',
+  '#2dd4bf',
+  '#f472b6',
 ]
+
+const AXIS_COLOR = '#948cb4'
+const GRID_COLOR = '#322c4a'
 
 interface PlayerStatsRow {
   id: string
@@ -46,16 +52,17 @@ interface GpResultRaw {
   grand_prix: { played_at: string } | null
 }
 
+/** Rows are keyed by player *id*, never name — see the Line dataKey note below. */
 type ChartRow = Record<string, number>
 type ChartMode = 'elo' | 'rank'
 
-function buildChartData(results: GpResultRaw[], nameById: Map<string, string>) {
+function buildChartData(results: GpResultRaw[], knownPlayerIds: Set<string>) {
   const seriesByPlayer = new Map<string, { t: string; elo: number }[]>()
   const timestampSet = new Set<string>()
 
   for (const r of results) {
     const t = r.grand_prix?.played_at
-    if (!t) continue
+    if (!t || !knownPlayerIds.has(r.player_id)) continue
     timestampSet.add(t)
     const list = seriesByPlayer.get(r.player_id) ?? []
     list.push({ t, elo: r.elo_after })
@@ -71,21 +78,20 @@ function buildChartData(results: GpResultRaw[], nameById: Map<string, string>) {
   timestamps.forEach((t, i) => {
     const eloRow: ChartRow = { seq: i + 1 }
     for (const [playerId, series] of seriesByPlayer) {
-      const name = nameById.get(playerId)
-      if (!name) continue
       const match = series.find((s) => s.t === t)
       if (match) {
-        eloRow[name] = match.elo
+        eloRow[playerId] = match.elo
         latestElo.set(playerId, match.elo)
       }
     }
     eloRows.push(eloRow)
 
+    // Rank everyone who has raced so far, not just this GP's field, so a
+    // player's line holds its position through GPs they sat out.
     const ranked = [...latestElo.entries()].sort((a, b) => b[1] - a[1])
     const rankRow: ChartRow = { seq: i + 1 }
     ranked.forEach(([playerId], idx) => {
-      const name = nameById.get(playerId)
-      if (name) rankRow[name] = idx + 1
+      rankRow[playerId] = idx + 1
     })
     rankRows.push(rankRow)
   })
@@ -99,30 +105,39 @@ function MiniLeaderboard({
   formatValue,
 }: {
   title: string
-  rows: { name: string; value: number }[]
+  rows: { id: string; name: string; value: number }[]
   formatValue: (value: number) => string
 }) {
   return (
-    <div>
-      <h2 className="text-sm font-semibold text-gray-700">{title}</h2>
-      <ol className="mt-2 flex flex-col gap-1 text-sm">
+    <section className="panel p-4">
+      <h2 className="text-[10px] font-medium uppercase tracking-[0.2em] text-haze">{title}</h2>
+      <ol className="mt-3 flex flex-col">
         {rows.map((row, index) => (
-          <li key={row.name} className="flex justify-between border-b border-gray-100 py-1">
-            <span>
-              <span className="mr-2 text-gray-400">{index + 1}</span>
-              {row.name}
+          <li
+            key={row.id}
+            className="flex items-center justify-between gap-3 border-b border-line/60 py-2 last:border-0"
+          >
+            <span className="flex min-w-0 items-baseline gap-2.5">
+              <span
+                className={`font-mono text-xs ${index === 0 ? 'text-gold' : 'text-haze'}`}
+              >
+                {index + 1}
+              </span>
+              <span className="truncate font-display text-sm font-bold text-chalk">
+                {row.name}
+              </span>
             </span>
-            <span className="font-medium">{formatValue(row.value)}</span>
+            <span className="shrink-0 font-mono text-sm text-chalk">{formatValue(row.value)}</span>
           </li>
         ))}
       </ol>
-    </div>
+    </section>
   )
 }
 
 export default function Analytics() {
   const [stats, setStats] = useState<PlayerStatsRow[]>([])
-  const [playerNames, setPlayerNames] = useState<string[]>([])
+  const [players, setPlayers] = useState<PlayerRaw[]>([])
   const [eloRows, setEloRows] = useState<ChartRow[]>([])
   const [rankRows, setRankRows] = useState<ChartRow[]>([])
   const [mode, setMode] = useState<ChartMode>('elo')
@@ -132,11 +147,8 @@ export default function Analytics() {
   async function loadData() {
     const [statsRes, playersRes, resultsRes] = await Promise.all([
       supabase.from('player_stats').select('id, name, elo, gp_count, total_points, avg_points'),
-      supabase.from('players').select('id, name').gt('gp_count', 0),
-      supabase
-        .from('gp_results')
-        .select('player_id, elo_after, grand_prix(played_at)')
-        .order('played_at', { referencedTable: 'grand_prix', ascending: true }),
+      supabase.from('players').select('id, name').gt('gp_count', 0).order('name'),
+      supabase.from('gp_results').select('player_id, elo_after, grand_prix(played_at)'),
     ])
 
     const firstError = statsRes.error ?? playersRes.error ?? resultsRes.error
@@ -146,13 +158,15 @@ export default function Analytics() {
       return
     }
 
-    const players = (playersRes.data ?? []) as PlayerRaw[]
-    const nameById = new Map(players.map((p) => [p.id, p.name]))
+    const nextPlayers = (playersRes.data ?? []) as PlayerRaw[]
     const results = (resultsRes.data ?? []) as unknown as GpResultRaw[]
-    const { eloRows: nextEloRows, rankRows: nextRankRows } = buildChartData(results, nameById)
+    const { eloRows: nextEloRows, rankRows: nextRankRows } = buildChartData(
+      results,
+      new Set(nextPlayers.map((p) => p.id)),
+    )
 
     setStats((statsRes.data ?? []) as PlayerStatsRow[])
-    setPlayerNames(players.map((p) => p.name))
+    setPlayers(nextPlayers)
     setEloRows(nextEloRows)
     setRankRows(nextRankRows)
     setError(null)
@@ -176,65 +190,105 @@ export default function Analytics() {
   }, [])
 
   const chartRows = mode === 'elo' ? eloRows : rankRows
-  const maxRank = playerNames.length
+  const maxRank = players.length
+
+  const modeButtonClass = (active: boolean) =>
+    `rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${
+      active ? 'bg-gold text-asphalt' : 'border border-line text-haze hover:text-chalk'
+    }`
 
   return (
-    <div className="mx-auto max-w-4xl p-6">
-      <h1 className="text-2xl font-semibold">Analytics</h1>
+    <div className="mx-auto max-w-4xl px-5 py-8">
+      <PageHeader
+        title="Form guide"
+        subtitle="How every rating has moved, grand prix by grand prix."
+      />
 
       {error && (
-        <p className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
-          Couldn't load analytics: {error}
+        <p className="panel border-spin/40 bg-spin/10 p-4 text-sm text-spin">
+          The form guide didn't load: {error}
         </p>
       )}
 
-      {!error && loading && <p className="mt-4 text-sm text-gray-500">Loading…</p>}
+      {!error && loading && <p className="text-sm text-haze">Loading results…</p>}
 
       {!error && !loading && chartRows.length === 0 && (
-        <p className="mt-4 text-sm text-gray-500">No results yet — submit a GP to get started.</p>
+        <div className="panel p-6 text-center">
+          <p className="font-display text-lg font-bold text-chalk">Nothing to chart yet</p>
+          <p className="mt-1 text-sm text-haze">
+            Ratings start moving after the first grand prix is submitted.
+          </p>
+        </div>
       )}
 
       {!error && !loading && chartRows.length > 0 && (
         <>
-          <div className="mt-6 flex gap-2">
+          <div className="flex gap-2">
             <button
               type="button"
               onClick={() => setMode('elo')}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                mode === 'elo' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'
-              }`}
+              className={modeButtonClass(mode === 'elo')}
             >
-              Elo over time
+              Rating
             </button>
             <button
               type="button"
               onClick={() => setMode('rank')}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                mode === 'rank' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-700'
-              }`}
+              className={modeButtonClass(mode === 'rank')}
             >
-              Rank over time
+              Position
             </button>
           </div>
 
-          <div className="mt-4 h-80 w-full">
+          <div className="panel mt-4 h-80 w-full p-4 pl-0">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartRows} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="seq" tickLine={false} label={{ value: 'GP #', position: 'insideBottom', offset: -4 }} />
+              <LineChart data={chartRows} margin={{ top: 8, right: 16, bottom: 16, left: 0 }}>
+                <CartesianGrid stroke={GRID_COLOR} strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="seq"
+                  tickLine={false}
+                  stroke={AXIS_COLOR}
+                  fontSize={12}
+                  label={{
+                    value: 'GRAND PRIX',
+                    position: 'insideBottom',
+                    offset: -8,
+                    fill: AXIS_COLOR,
+                    fontSize: 10,
+                    letterSpacing: 2,
+                  }}
+                />
                 <YAxis
                   allowDecimals={false}
+                  stroke={AXIS_COLOR}
+                  fontSize={12}
+                  tickLine={false}
                   reversed={mode === 'rank'}
                   domain={mode === 'rank' ? [1, maxRank] : ['auto', 'auto']}
                 />
-                <Tooltip />
-                <Legend />
-                {playerNames.map((name, index) => (
+                <Tooltip
+                  contentStyle={{
+                    background: '#1c1930',
+                    border: `1px solid ${GRID_COLOR}`,
+                    borderRadius: '0.5rem',
+                    fontSize: 13,
+                  }}
+                  labelFormatter={(seq) => `Grand prix ${seq}`}
+                  labelStyle={{ color: AXIS_COLOR }}
+                />
+                <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+                {players.map((player, index) => (
+                  // dataKey is the player id, not the name: Recharts reads a
+                  // string dataKey as an object path, so a name containing a
+                  // dot ("Bowser Jr.") would resolve to nothing and the line
+                  // would silently vanish. `name` is what the legend shows.
                   <Line
-                    key={name}
+                    key={player.id}
                     type="monotone"
-                    dataKey={name}
+                    dataKey={player.id}
+                    name={player.name}
                     stroke={LINE_COLORS[index % LINE_COLORS.length]}
+                    strokeWidth={2}
                     connectNulls
                     dot={false}
                   />
@@ -243,27 +297,27 @@ export default function Analytics() {
             </ResponsiveContainer>
           </div>
 
-          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-3">
+          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <MiniLeaderboard
-              title="Elo"
+              title="Rating"
               rows={[...stats]
                 .sort((a, b) => b.elo - a.elo)
-                .map((s) => ({ name: s.name, value: s.elo }))}
+                .map((s) => ({ id: s.id, name: s.name, value: s.elo }))}
               formatValue={(v) => `${v}`}
             />
             <MiniLeaderboard
-              title="Points"
+              title="Total points"
               rows={[...stats]
                 .sort((a, b) => b.total_points - a.total_points)
-                .map((s) => ({ name: s.name, value: s.total_points }))}
+                .map((s) => ({ id: s.id, name: s.name, value: s.total_points }))}
               formatValue={(v) => `${v}`}
             />
             <MiniLeaderboard
-              title="Avg Points / GP"
+              title="Points per GP"
               rows={[...stats]
                 .sort((a, b) => b.avg_points - a.avg_points)
-                .map((s) => ({ name: s.name, value: s.avg_points }))}
-              formatValue={(v) => v.toFixed(1)}
+                .map((s) => ({ id: s.id, name: s.name, value: s.avg_points }))}
+              formatValue={(v) => Number(v).toFixed(1)}
             />
           </div>
         </>

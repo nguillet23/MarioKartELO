@@ -90,13 +90,20 @@ Supabase-specific checks (need the SQL setup below run first) are in
 This is the one-time SQL setup for the Supabase project, matching the
 design in `PLAN.md`. The actual SQL lives in the repo, not here:
 
-1. **`supabase/migrations/0001_init.sql`** — run once on a fresh Supabase
-   project, in the dashboard's SQL Editor. Creates all four tables, the
-   `player_stats` view, enables Row Level Security with public-read-only
-   policies, creates the two password-gated functions (`submit_gp`,
-   `add_player`) that are the only way to write data, and adds `players`
-   to the `supabase_realtime` publication so the Leaderboard page's live
-   subscription actually receives updates.
+1. **`supabase/migrations/0001_init.sql`** — run once on a **fresh**
+   Supabase project, in the dashboard's SQL Editor. Creates all four tables,
+   the `player_stats` view, enables Row Level Security with public-read-only
+   policies, creates the password-gated functions (`submit_gp`,
+   `void_last_gp`, `add_player`) that are the only way to write data, and
+   adds `players` to the `supabase_realtime` publication so the Leaderboard
+   page's live subscription actually receives updates.
+
+   **Already have a database from before `void_last_gp` existed?** Run
+   **`supabase/migrations/0002_void_and_guard.sql`** instead — it adds
+   `void_last_gp`, a stale-rating guard on `submit_gp` (rejects a submission
+   if someone else's GP landed in between and the ratings it was computed
+   from are now out of date), and `search_path` pinning on every function,
+   without touching your existing rows. Safe to run more than once.
 2. **`supabase/set_password.sql`** — run separately, after step 1. Open
    the file, replace `REPLACE_WITH_YOUR_PASSWORD` with your actual chosen
    password *in the SQL Editor only* (never commit that
@@ -149,6 +156,15 @@ against `site_secret`/`players`):
   `site_secret` should all show a green "RLS enabled" badge (`player_stats`
   will say "Unrestricted" instead — expected, since RLS only applies to
   tables, not views).
+- Confirm voiding works: submit a throwaway GP from the Submit GP page,
+  note the ratings it produced, then use the "Void this grand prix" button
+  below the form. The affected players' ratings/GP counts should roll back
+  to exactly what they were before, and the GP should disappear from
+  `grand_prix`.
+- Confirm the stale-rating guard works: open Submit GP in two browser tabs,
+  submit a GP in one, then try submitting a *different* GP in the other tab
+  (which still has the old ratings loaded) — it should fail with a message
+  to refresh, not silently overwrite the first GP's rating changes.
 
 ## Notes
 
