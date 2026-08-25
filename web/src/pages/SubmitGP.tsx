@@ -166,7 +166,7 @@ export default function SubmitGP() {
                 <span className="w-6 text-sm text-gray-400">{index + 1}</span>
 
                 <select
-                  className="flex-1 rounded-md border border-gray-300 px-2 py-2 text-sm"
+                  className="flex-1 rounded-md border border-gray-300 px-2 py-2 text-base"
                   value={entry.playerId}
                   onChange={(e) => updateEntry(entry.key, { playerId: e.target.value })}
                   disabled={rosterLoading}
@@ -188,7 +188,7 @@ export default function SubmitGP() {
                   value={entry.points}
                   onChange={(e) => updateEntry(entry.key, { points: e.target.value })}
                   placeholder="Points"
-                  className="w-24 rounded-md border border-gray-300 px-2 py-2 text-sm"
+                  className="w-24 rounded-md border border-gray-300 px-2 py-2 text-base"
                 />
 
                 <button
@@ -223,7 +223,7 @@ export default function SubmitGP() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-base"
           />
         </div>
 
