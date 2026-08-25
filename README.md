@@ -1,10 +1,31 @@
-# Mario Kart Elo — Supabase Setup
+# Mario Kart Elo
+
+A friend-group Mario Kart Grand Prix tracker with a chess-style Elo rating
+per player. See `PLAN.md` for the full design.
+
+## Local Development
+
+The app lives in `web/` (Vite + React + TypeScript + Tailwind).
+
+1. Install dependencies:
+   - `cd web`
+   - `npm install`
+2. Copy `web/.env.example` to `web/.env` and fill in your Supabase
+   project's URL and anon key (Supabase dashboard → Project Settings →
+   API). `.env` is gitignored — never commit real keys, though the anon
+   key is meant to be public anyway (see `PLAN.md` §1).
+3. Run the dev server: `npm run dev` (from inside `web/`).
+4. Build for production: `npm run build` — outputs to `web/dist/`, with
+   the `/MarioKartELO/` base path already configured in `vite.config.ts`
+   for GitHub Pages hosting.
+
+## Supabase Setup
 
 This is the one-time SQL setup for the Supabase project, matching the
 design in `PLAN.md`. Paste each block into the Supabase dashboard's
 **SQL Editor** and run it, in order.
 
-## 1. Schema, view, RLS, and write-access functions
+### 1. Schema, view, RLS, and write-access functions
 
 Run this once on a fresh Supabase project. It creates all four tables, the
 `player_stats` view, enables Row Level Security with public-read-only
@@ -129,7 +150,7 @@ grant execute on function submit_gp(text, text, jsonb) to anon;
 grant execute on function add_player(text, text) to anon;
 ```
 
-## 2. Set the site password
+### 2. Set the site password
 
 Run this separately — replace `REPLACE_WITH_YOUR_PASSWORD` with the actual
 password before running. This is also how you change the password later
@@ -140,6 +161,41 @@ insert into site_secret (id, password_hash)
 values (1, crypt('REPLACE_WITH_YOUR_PASSWORD', gen_salt('bf')))
 on conflict (id) do update set password_hash = excluded.password_hash;
 ```
+
+## Verifying Everything Works
+
+Commands to independently check things yourself — this section grows as
+more gets built.
+
+**Git / repo state**
+- `git status` — see what's staged, modified, or untracked.
+- `git ls-files` — see exactly what git is tracking (e.g. confirm
+  `PLAN.md` does *not* show up — it's intentionally excluded via the root
+  `.gitignore`, kept local-only on purpose).
+- `git check-ignore -v <path>` — see which `.gitignore` line (and which
+  file) is excluding a given path, if a file you expect to be tracked
+  isn't.
+
+**Web app (`web/`)**
+- `cd web && npm install` — install dependencies.
+- `cd web && npm run dev` — start the local dev server, then open the
+  printed `localhost` URL in a browser and click through the pages.
+- `cd web && npx tsc --noEmit` — type-check without building.
+- `cd web && npm run build` — production build, outputs to `web/dist/`.
+
+**Supabase** (in the dashboard's SQL Editor, after running the setup in
+the section above)
+- `select password_hash from site_secret;` — should return a bcrypt hash
+  (starts with `$2a$` or `$2b$`), never your literal password.
+- `select add_player('wrong-password', 'Test Player');` — should raise
+  `invalid password` and add nothing.
+- `select add_player('your-real-password', 'Test Player');` — should
+  return a UUID and add a row to `players` (delete it afterward with
+  `delete from players where name = 'Test Player';` so it doesn't linger).
+- Table Editor — confirm `players`, `grand_prix`, `gp_results`,
+  `site_secret` all show a green "RLS enabled" badge (`player_stats`
+  will say "Unrestricted" instead — expected, since RLS only applies to
+  tables, not views).
 
 ## Notes
 
