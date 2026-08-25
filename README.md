@@ -51,6 +51,12 @@ Static analysis (unused vars, hook rule violations, etc.):
 npm run lint
 ```
 
+Run unit tests (currently just `elo.ts` — the pure Elo algorithm):
+
+```bash
+npm run test
+```
+
 Production build, outputs to `web/dist/`:
 
 ```bash
