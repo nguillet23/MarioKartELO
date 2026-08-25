@@ -3,197 +3,136 @@
 A friend-group Mario Kart Grand Prix tracker with a chess-style Elo rating
 per player. See `PLAN.md` for the full design.
 
-## Local Development
+## Quick Commands
 
-The app lives in `web/` (Vite + React + TypeScript + Tailwind).
+Everything needed to run the app and check any change, in one place —
+no digging through the Supabase SQL below. All commands run from inside
+`web/` unless noted otherwise.
 
-1. Install dependencies:
-   - `cd web`
-   - `npm install`
-2. Copy `web/.env.example` to `web/.env` and fill in your Supabase
-   project's URL and anon key (Supabase dashboard → Project Settings →
-   API). `.env` is gitignored — never commit real keys, though the anon
-   key is meant to be public anyway (see `PLAN.md` §1).
-3. Run the dev server: `npm run dev` (from inside `web/`).
-4. Build for production: `npm run build` — outputs to `web/dist/`, with
-   the `/MarioKartELO/` base path already configured in `vite.config.ts`
-   for GitHub Pages hosting.
+**One-time setup**
+
+Install dependencies:
+
+```bash
+cd web
+npm install
+```
+
+Create your local env file:
+
+```bash
+cp .env.example .env
+```
+
+Then open `web/.env` and fill in your Supabase project's URL and anon key
+(dashboard → Project Settings → API). `.env` is gitignored — never commit
+real keys, though the anon key is meant to be public anyway (see
+`PLAN.md` §1).
+
+**Run it**
+
+```bash
+npm run dev
+```
+
+Then open the printed `localhost` URL in a browser.
+
+**Check the code**
+
+Type-check without building:
+
+```bash
+npx tsc --noEmit
+```
+
+Static analysis (unused vars, hook rule violations, etc.):
+
+```bash
+npm run lint
+```
+
+Production build, outputs to `web/dist/`:
+
+```bash
+npm run build
+```
+
+Serve that production build locally — different from `npm run dev`'s
+dev-mode server; catches anything that only breaks in the built output,
+e.g. the `/MarioKartELO/` base path:
+
+```bash
+npm run preview
+```
+
+See what's staged, modified, or untracked:
+
+```bash
+git status
+```
+
+See exactly what git is tracking (e.g. confirm `PLAN.md` does *not* show
+up — intentionally excluded, kept local-only):
+
+```bash
+git ls-files
+```
+
+See which `.gitignore` line is excluding a given path, if something you
+expect to be tracked isn't (replace `<path>` with the actual path):
+
+```bash
+git check-ignore -v <path>
+```
+
+**Check it in the browser** (manual — the commands above only catch what
+compiles/lints cleanly, not whether it actually looks/works right)
+
+1. `npm run dev`, open the printed `localhost` URL.
+2. Click through all the nav links (currently: Leaderboard `/`, Analytics
+   `/analytics`, Submit GP `/submit`) — each should load and highlight
+   the active tab.
+3. Open the browser DevTools console (F12) and confirm there are no red
+   errors — Vite's HMR connect messages and React's DevTools notice are
+   normal and fine to ignore.
+
+Supabase-specific checks (need the SQL setup below run first) are in
+**Verifying Everything Works** further down.
 
 ## Supabase Setup
 
 This is the one-time SQL setup for the Supabase project, matching the
-design in `PLAN.md`. Paste each block into the Supabase dashboard's
-**SQL Editor** and run it, in order.
+design in `PLAN.md`. The actual SQL lives in the repo, not here:
 
-### 1. Schema, view, RLS, and write-access functions
-
-Run this once on a fresh Supabase project. It creates all four tables, the
-`player_stats` view, enables Row Level Security with public-read-only
-policies, and creates the two password-gated functions that are the only
-way to write data.
-
-```sql
-create extension if not exists pgcrypto;
-
-create table players (
-  id            uuid primary key default gen_random_uuid(),
-  name          text unique not null,
-  elo           numeric not null default 1500,
-  gp_count      int not null default 0,
-  created_at    timestamptz not null default now()
-);
-
-create table grand_prix (
-  id            uuid primary key default gen_random_uuid(),
-  played_at     timestamptz not null default now(),
-  label         text,
-  created_at    timestamptz not null default now()
-);
-
-create table gp_results (
-  id            uuid primary key default gen_random_uuid(),
-  grand_prix_id uuid not null references grand_prix(id) on delete cascade,
-  player_id     uuid not null references players(id),
-  points        int not null check (points between 4 and 60),
-  elo_before    numeric not null,
-  elo_after     numeric not null,
-  elo_delta     numeric not null,
-  unique (grand_prix_id, player_id)
-);
-
-create table site_secret (
-  id            int primary key default 1 check (id = 1),
-  password_hash text not null
-);
-
-create view player_stats as
-select
-  p.id, p.name, p.elo, p.gp_count,
-  coalesce(sum(r.points), 0)                                 as total_points,
-  coalesce(sum(r.points), 0)::numeric / nullif(p.gp_count, 0) as avg_points
-from players p
-left join gp_results r on r.player_id = p.id
-where p.gp_count > 0
-group by p.id;
-
-alter table players     enable row level security;
-alter table grand_prix  enable row level security;
-alter table gp_results  enable row level security;
-alter table site_secret enable row level security;
-
-create policy "public read players"    on players    for select to anon using (true);
-create policy "public read grand_prix" on grand_prix for select to anon using (true);
-create policy "public read gp_results" on gp_results for select to anon using (true);
--- site_secret gets no policy at all: no one can select/insert/update it directly,
--- not even anon reading it, only the functions below (they bypass RLS as the table owner).
-
-grant select on players, grand_prix, gp_results, player_stats to anon;
-
-create or replace function submit_gp(password text, gp_label text, results jsonb)
-returns uuid
-language plpgsql
-security definer
-as $$
-declare
-  new_gp_id uuid;
-  r jsonb;
-begin
-  if not exists (
-    select 1 from site_secret where password_hash = crypt(password, password_hash)
-  ) then
-    raise exception 'invalid password';
-  end if;
-
-  insert into grand_prix (label) values (gp_label) returning id into new_gp_id;
-
-  for r in select * from jsonb_array_elements(results) loop
-    insert into gp_results (grand_prix_id, player_id, points, elo_before, elo_after, elo_delta)
-    values (
-      new_gp_id,
-      (r->>'player_id')::uuid,
-      (r->>'points')::int,
-      (r->>'elo_before')::numeric,
-      (r->>'elo_after')::numeric,
-      (r->>'elo_delta')::numeric
-    );
-
-    update players
-      set elo = (r->>'elo_after')::numeric,
-          gp_count = gp_count + 1
-      where id = (r->>'player_id')::uuid;
-  end loop;
-
-  return new_gp_id;
-end;
-$$;
-
-create or replace function add_player(password text, player_name text)
-returns uuid
-language plpgsql
-security definer
-as $$
-declare
-  new_id uuid;
-begin
-  if not exists (
-    select 1 from site_secret where password_hash = crypt(password, password_hash)
-  ) then
-    raise exception 'invalid password';
-  end if;
-
-  insert into players (name) values (player_name) returning id into new_id;
-  return new_id;
-end;
-$$;
-
-grant execute on function submit_gp(text, text, jsonb) to anon;
-grant execute on function add_player(text, text) to anon;
-```
-
-### 2. Set the site password
-
-Run this separately — replace `REPLACE_WITH_YOUR_PASSWORD` with the actual
-password before running. This is also how you change the password later
-(just run it again with a new value; the `on conflict` makes it an upsert).
-
-```sql
-insert into site_secret (id, password_hash)
-values (1, crypt('REPLACE_WITH_YOUR_PASSWORD', gen_salt('bf')))
-on conflict (id) do update set password_hash = excluded.password_hash;
-```
+1. **`supabase/migrations/0001_init.sql`** — run once on a fresh Supabase
+   project, in the dashboard's SQL Editor. Creates all four tables, the
+   `player_stats` view, enables Row Level Security with public-read-only
+   policies, and creates the two password-gated functions (`submit_gp`,
+   `add_player`) that are the only way to write data.
+2. **`supabase/set_password.sql`** — run separately, after step 1. Open
+   the file, replace `REPLACE_WITH_YOUR_PASSWORD` with your actual chosen
+   password *in the SQL Editor only* (never commit that edit — the file
+   in the repo should always keep the placeholder), then run it. This is
+   also how you change the password later: re-run it with a new value.
 
 ## Verifying Everything Works
 
-Commands to independently check things yourself — this section grows as
-more gets built.
+Supabase-specific checks — see **Quick Commands** above for the web app
+and git checks. This section grows as more gets built. Do each of these
+in the dashboard's SQL Editor, after running the setup above (exact
+queries aren't repeated here — write them ad hoc, they're one-liners
+against `site_secret`/`players`):
 
-**Git / repo state**
-- `git status` — see what's staged, modified, or untracked.
-- `git ls-files` — see exactly what git is tracking (e.g. confirm
-  `PLAN.md` does *not* show up — it's intentionally excluded via the root
-  `.gitignore`, kept local-only on purpose).
-- `git check-ignore -v <path>` — see which `.gitignore` line (and which
-  file) is excluding a given path, if a file you expect to be tracked
-  isn't.
-
-**Web app (`web/`)**
-- `cd web && npm install` — install dependencies.
-- `cd web && npm run dev` — start the local dev server, then open the
-  printed `localhost` URL in a browser and click through the pages.
-- `cd web && npx tsc --noEmit` — type-check without building.
-- `cd web && npm run build` — production build, outputs to `web/dist/`.
-
-**Supabase** (in the dashboard's SQL Editor, after running the setup in
-the section above)
-- `select password_hash from site_secret;` — should return a bcrypt hash
-  (starts with `$2a$` or `$2b$`), never your literal password.
-- `select add_player('wrong-password', 'Test Player');` — should raise
-  `invalid password` and add nothing.
-- `select add_player('your-real-password', 'Test Player');` — should
-  return a UUID and add a row to `players` (delete it afterward with
-  `delete from players where name = 'Test Player';` so it doesn't linger).
-- Table Editor — confirm `players`, `grand_prix`, `gp_results`,
-  `site_secret` all show a green "RLS enabled" badge (`player_stats`
+- Confirm the password is actually hashed, not stored as plaintext:
+  select `password_hash` from `site_secret` and check it starts with
+  `$2a$` or `$2b$` (bcrypt), never your literal password.
+- Confirm a wrong password is rejected: call `add_player` with a bogus
+  password — it should raise `invalid password` and add nothing.
+- Confirm the right password works: call `add_player` with the real
+  password — it should return a UUID and add a row to `players`. Delete
+  that test row afterward so it doesn't linger in your roster.
+- In the Table Editor: `players`, `grand_prix`, `gp_results`,
+  `site_secret` should all show a green "RLS enabled" badge (`player_stats`
   will say "Unrestricted" instead — expected, since RLS only applies to
   tables, not views).
 
