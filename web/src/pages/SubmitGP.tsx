@@ -51,6 +51,13 @@ function makeDefaultEntries(): Entry[] {
   return Array.from({ length: DEFAULT_PLAYERS }, makeEmptyEntry)
 }
 
+/** `datetime-local` inputs take a plain local-time string with no timezone — this is "now" in that format, used as the field's upper bound. */
+function nowForDatetimeLocal(): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const d = new Date()
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export default function SubmitGP() {
   const [roster, setRoster] = useState<PlayerRow[]>([])
   const [rosterLoading, setRosterLoading] = useState(true)
@@ -58,6 +65,8 @@ export default function SubmitGP() {
 
   const [password, setPassword] = useState('')
   const [entries, setEntries] = useState<Entry[]>(makeDefaultEntries)
+  /** Blank means "just happened" — submit_gp defaults to now() when this is omitted. Only set to backdate a forgotten night. */
+  const [playedAt, setPlayedAt] = useState('')
 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -226,6 +235,20 @@ export default function SubmitGP() {
       return
     }
 
+    let playedAtIso: string | null = null
+    if (playedAt) {
+      const parsedDate = new Date(playedAt)
+      if (Number.isNaN(parsedDate.getTime())) {
+        setError("That date doesn't parse. Pick it from the calendar instead of typing it.")
+        return
+      }
+      if (parsedDate.getTime() > Date.now()) {
+        setError('Played-at time is in the future.')
+        return
+      }
+      playedAtIso = parsedDate.toISOString()
+    }
+
     setSubmitting(true)
     try {
       // Re-read ratings right before computing. They were loaded when the page
@@ -259,6 +282,7 @@ export default function SubmitGP() {
       const { data: newGpId, error: submitError } = await supabase.rpc('submit_gp', {
         password,
         results,
+        played_at: playedAtIso,
       })
       if (submitError) throw new Error(submitError.message)
 
@@ -274,6 +298,7 @@ export default function SubmitGP() {
       }
       setEntries(makeDefaultEntries())
       setPassword('')
+      setPlayedAt('')
       setConfirmingVoid(false)
       setVoidSuccess(false)
       await Promise.all([loadRoster(), loadLastGp()])
@@ -413,6 +438,27 @@ export default function SubmitGP() {
         >
           Add a racer
         </button>
+
+        <div className="mt-2">
+          <label
+            className="block text-[10px] font-medium uppercase tracking-[0.2em] text-haze"
+            htmlFor="played-at"
+          >
+            Played at (leave blank for now)
+          </label>
+          <input
+            id="played-at"
+            type="datetime-local"
+            value={playedAt}
+            max={nowForDatetimeLocal()}
+            onChange={(e) => setPlayedAt(e.target.value)}
+            className="field mt-2"
+          />
+          <p className="mt-1.5 text-xs text-haze">
+            Only for a night you forgot to log — it can't be set earlier than the last grand prix
+            already on record.
+          </p>
+        </div>
 
         <div className="mt-2">
           <label
