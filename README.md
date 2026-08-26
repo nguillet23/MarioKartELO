@@ -51,7 +51,9 @@ Static analysis (unused vars, hook rule violations, etc.):
 npm run lint
 ```
 
-Run unit tests (currently just `elo.ts` — the pure Elo algorithm):
+Run unit tests (`elo.ts`, the pure Elo algorithm, and `stats.ts`, the
+derived stats behind head-to-head records, streaks, rivals, personal bests,
+and recaps):
 
 ```bash
 npm run test
@@ -76,9 +78,27 @@ compiles/lints cleanly, not whether it actually looks/works right)
 
 1. `npm run dev`, open the printed `localhost` URL.
 2. Click through all the nav links (currently: Leaderboard `/`, Analytics
-   `/analytics`, Submit GP `/submit`) — each should load and highlight
-   the active tab.
-3. Open the browser DevTools console (F12) and confirm there are no red
+   `/analytics`, Head to Head `/head-to-head`, Submit GP `/submit`) — each
+   should load and highlight the active tab. At phone width the tabs use
+   short labels (Table / Form / H2H / Submit); check all four still fit
+   on one line.
+3. Tap a racer's name on the Leaderboard — it should open their profile at
+   `/player/<id>` with a rating chart, streaks, rival, and their record
+   against everyone else. The rival's name and each opponent row should
+   link onward (to that profile, and to the matchup on Head to Head).
+4. On Head to Head, pick two racers. The picks are stored in the URL
+   (`/head-to-head?a=<id>&b=<id>`), so reloading the page should keep the
+   matchup and the link should work when pasted somewhere else. The swap
+   button should reverse the matchup, and the net Elo should flip sign.
+5. Submit a throwaway GP (see below) and check the Race recap panel that
+   appears under the form: finishing order, each racer's rating change,
+   any DEBUT/PEAK/BEST GP badges, and a line naming who gained and lost
+   the most. Then press "Share result card" — on a phone this opens the OS
+   share sheet, on a desktop browser it downloads a PNG. Open the PNG and
+   confirm nothing is clipped, especially with the longest name in your
+   roster and with a full 12-racer field. Void the GP afterward; the recap
+   should disappear with it.
+6. Open the browser DevTools console (F12) and confirm there are no red
    errors — Vite's HMR connect messages and React's DevTools notice are
    normal and fine to ignore.
 
@@ -103,7 +123,15 @@ design in `PLAN.md`. The actual SQL lives in the repo, not here:
    skip those and paste just the `create extension`, the three
    `create or replace function` blocks, and the `grant execute` lines. Safe
    to run more than once.
-2. **`supabase/set_password.sql`** — run separately, after step 1. Open
+2. **`supabase/reset_ratings.sql`** — *not* part of setup, and destructive:
+   it deletes every recorded grand prix and puts all characters back to a
+   clean rating, keeping the roster. Run it when the rating settings change
+   (`STARTING_ELO` / `DEFAULT_K` / `RATING_SCALE` in `web/src/lib/elo.ts`)
+   and the old history isn't worth keeping — results rated under the old
+   settings would otherwise sit in the same table on a different scale. It
+   also adds the `elo >= 0` floor to a database created before that existed.
+   There is no undo.
+3. **`supabase/set_password.sql`** — run separately, after step 1. Open
    the file, replace `REPLACE_WITH_YOUR_PASSWORD` with your actual chosen
    password *in the SQL Editor only* (never commit that
    edit — the file in the repo should always keep the placeholder), then
@@ -160,6 +188,11 @@ against `site_secret`/`players`):
   below the form. The affected players' ratings/GP counts should roll back
   to exactly what they were before, and the GP should disappear from
   `grand_prix`.
+- Confirm the rating floor holds: ratings can't go below 0. `computeGpElo`
+  clamps there, and `players_elo_non_negative` on `players` is the backstop
+  if anything ever tries to write past it. To see the constraint bite, run
+  `update players set elo = -1;` in the SQL Editor — it should fail with a
+  check-constraint violation and change nothing.
 - Confirm the stale-rating guard works: open Submit GP in two browser tabs,
   submit a GP in one, then try submitting a *different* GP in the other tab
   (which still has the old ratings loaded) — it should fail with a message
@@ -176,3 +209,9 @@ against `site_secret`/`players`):
   functions above can read it internally — see `PLAN.md` §4 for why.
 - This is a shared-password model, not real per-person authentication. See
   `PLAN.md` §4 for the tradeoff that comes with that choice.
+- Head-to-head records, streaks, rivals, personal bests, and recaps are all
+  derived in the browser from the rows `gp_results` already stores (points
+  plus the rating each racer carried into and out of every GP), in
+  `web/src/lib/stats.ts`. None of them needed a schema change, so there is
+  no migration to run for any of it — an existing database already has
+  everything they read.

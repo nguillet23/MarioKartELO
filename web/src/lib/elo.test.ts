@@ -4,6 +4,7 @@ import {
   computeGpElo,
   DEFAULT_K,
   kFactorFor,
+  MIN_ELO,
   PROVISIONAL_GP_COUNT,
   PROVISIONAL_K,
   type GpParticipant,
@@ -16,11 +17,11 @@ function settled(playerId: string, rating: number, points: number): GpParticipan
 
 describe('computeGpElo', () => {
   it('throws with fewer than 2 participants', () => {
-    expect(() => computeGpElo([settled('a', 1500, 40)])).toThrow()
+    expect(() => computeGpElo([settled('a', 100, 40)])).toThrow()
   })
 
   it('throws when the same player appears twice', () => {
-    expect(() => computeGpElo([settled('a', 1500, 40), settled('a', 1500, 20)])).toThrow()
+    expect(() => computeGpElo([settled('a', 100, 40), settled('a', 100, 20)])).toThrow()
   })
 
   it("is zero-sum within rounding error: every GP's total rating change stays near 0", () => {
@@ -29,10 +30,10 @@ describe('computeGpElo', () => {
     // display/store as integers), which can leave a residual of at most
     // ~0.5 per participant once those independent roundings are summed.
     const participants = [
-      settled('a', 1500, 60),
-      settled('b', 1400, 30),
-      settled('c', 1600, 45),
-      settled('d', 1300, 4),
+      settled('a', 100, 60),
+      settled('b', 80, 30),
+      settled('c', 120, 45),
+      settled('d', 60, 4),
     ]
     const updates = computeGpElo(participants)
     const total = updates.reduce((sum, u) => sum + u.eloDelta, 0)
@@ -40,21 +41,21 @@ describe('computeGpElo', () => {
   })
 
   it('is symmetric for a 2-player GP: winner gains exactly what the loser loses', () => {
-    const [winner, loser] = computeGpElo([settled('a', 1500, 60), settled('b', 1500, 30)])
+    const [winner, loser] = computeGpElo([settled('a', 100, 60), settled('b', 100, 30)])
     expect(winner.eloDelta).toBeCloseTo(-loser.eloDelta, 10)
     expect(winner.eloDelta).toBeGreaterThan(0)
     expect(loser.eloDelta).toBeLessThan(0)
   })
 
   it('gives equally-rated tied players zero delta', () => {
-    const [a, b] = computeGpElo([settled('a', 1500, 30), settled('b', 1500, 30)])
+    const [a, b] = computeGpElo([settled('a', 100, 30), settled('b', 100, 30)])
     expect(a.eloDelta).toBeCloseTo(0, 10)
     expect(b.eloDelta).toBeCloseTo(0, 10)
   })
 
   it('rewards beating a higher-rated player more than beating a lower-rated one', () => {
-    const beatsLowerRated = computeGpElo([settled('a', 1500, 60), settled('b', 1400, 30)])
-    const beatsHigherRated = computeGpElo([settled('a', 1500, 60), settled('b', 1600, 30)])
+    const beatsLowerRated = computeGpElo([settled('a', 100, 60), settled('b', 80, 30)])
+    const beatsHigherRated = computeGpElo([settled('a', 100, 60), settled('b', 120, 30)])
 
     const gainVsLower = beatsLowerRated.find((u) => u.playerId === 'a')!.eloDelta
     const gainVsHigher = beatsHigherRated.find((u) => u.playerId === 'a')!.eloDelta
@@ -64,10 +65,10 @@ describe('computeGpElo', () => {
 
   it('ranks deltas in the same order as points when ratings are equal', () => {
     const updates = computeGpElo([
-      settled('a', 1500, 60),
-      settled('b', 1500, 40),
-      settled('c', 1500, 20),
-      settled('d', 1500, 4),
+      settled('a', 100, 60),
+      settled('b', 100, 40),
+      settled('c', 100, 20),
+      settled('d', 100, 4),
     ])
     const byPlayer = Object.fromEntries(updates.map((u) => [u.playerId, u.eloDelta]))
     expect(byPlayer.a).toBeGreaterThan(byPlayer.b)
@@ -76,7 +77,7 @@ describe('computeGpElo', () => {
   })
 
   it('scales with a custom K factor', () => {
-    const participants = [settled('a', 1500, 60), settled('b', 1500, 30)]
+    const participants = [settled('a', 100, 60), settled('b', 100, 30)]
     const normal = computeGpElo(participants, { k: DEFAULT_K })
     const doubled = computeGpElo(participants, { k: DEFAULT_K * 2 })
 
@@ -89,7 +90,7 @@ describe('computeGpElo', () => {
 
   it('scales pairwise comparisons correctly for a 12-player field', () => {
     const participants = Array.from({ length: 12 }, (_, i) =>
-      settled(`p${i}`, 1500, 60 - i * 5),
+      settled(`p${i}`, 100, 60 - i * 5),
     )
     const updates = computeGpElo(participants)
     expect(updates).toHaveLength(12)
@@ -100,7 +101,7 @@ describe('computeGpElo', () => {
   })
 
   it('preserves eloBefore/eloAfter/eloDelta consistency', () => {
-    const updates = computeGpElo([settled('a', 1500, 60), settled('b', 1450, 20)])
+    const updates = computeGpElo([settled('a', 100, 60), settled('b', 90, 20)])
     for (const u of updates) {
       expect(u.eloAfter).toBeCloseTo(u.eloBefore + u.eloDelta, 10)
     }
@@ -108,9 +109,9 @@ describe('computeGpElo', () => {
 
   it('always rounds eloDelta and eloAfter to whole numbers', () => {
     const updates = computeGpElo([
-      settled('a', 1517, 37),
-      settled('b', 1483, 41),
-      settled('c', 1502, 22),
+      settled('a', 105, 37),
+      settled('b', 95, 41),
+      settled('c', 101, 22),
     ])
     for (const u of updates) {
       expect(Number.isInteger(u.eloDelta)).toBe(true)
@@ -121,8 +122,8 @@ describe('computeGpElo', () => {
 
 describe('margin of victory', () => {
   it('scores a blowout higher than a narrow win', () => {
-    const blowout = computeGpElo([settled('a', 1500, 60), settled('b', 1500, 4)])
-    const nailBiter = computeGpElo([settled('a', 1500, 32), settled('b', 1500, 30)])
+    const blowout = computeGpElo([settled('a', 100, 60), settled('b', 100, 4)])
+    const nailBiter = computeGpElo([settled('a', 100, 32), settled('b', 100, 30)])
 
     const blowoutGain = blowout.find((u) => u.playerId === 'a')!.eloDelta
     const nailBiterGain = nailBiter.find((u) => u.playerId === 'a')!.eloDelta
@@ -131,7 +132,7 @@ describe('margin of victory', () => {
   })
 
   it('still counts a narrow win as a win', () => {
-    const [winner, loser] = computeGpElo([settled('a', 1500, 31), settled('b', 1500, 30)])
+    const [winner, loser] = computeGpElo([settled('a', 100, 31), settled('b', 100, 30)])
     expect(winner.eloDelta).toBeGreaterThan(0)
     expect(loser.eloDelta).toBeLessThan(0)
   })
@@ -176,13 +177,77 @@ describe('kFactorFor', () => {
 
   it('moves a provisional player further than a settled one in the same GP', () => {
     const [rookie] = computeGpElo([
-      { playerId: 'rookie', rating: 1500, points: 60, gpCount: 0 },
-      { playerId: 'regular', rating: 1500, points: 30, gpCount: 20 },
+      { playerId: 'rookie', rating: 100, points: 60, gpCount: 0 },
+      { playerId: 'regular', rating: 100, points: 30, gpCount: 20 },
     ])
     const [veteran] = computeGpElo([
-      { playerId: 'veteran', rating: 1500, points: 60, gpCount: 20 },
-      { playerId: 'regular', rating: 1500, points: 30, gpCount: 20 },
+      { playerId: 'veteran', rating: 100, points: 60, gpCount: 20 },
+      { playerId: 'regular', rating: 100, points: 30, gpCount: 20 },
     ])
     expect(rookie.eloDelta).toBeGreaterThan(veteran.eloDelta)
+  })
+})
+
+describe('the rating floor', () => {
+  /**
+   * A whole field near the floor. That's the case the clamp exists for: a lone
+   * low-rated player in a normal field is already expected to lose, so their
+   * raw delta is near zero and there is nothing to truncate. Level the field
+   * and last place takes a full-sized loss with nowhere left to fall.
+   */
+  const lowField = (rating: number) => [
+    settled('a', rating, 60),
+    settled('b', rating, 45),
+    settled('c', rating, 30),
+    settled('d', rating, 4),
+  ]
+
+  const lastPlace = (rating: number) =>
+    computeGpElo(lowField(rating)).find((u) => u.playerId === 'd')!
+
+  it('truncates a loss that would cross the floor', () => {
+    // Unclamped this is -7 (see the rating of 8 below, which has room for it).
+    const clamped = lastPlace(5)
+    expect(clamped.eloAfter).toBe(MIN_ELO)
+    expect(clamped.eloDelta).toBe(-5)
+    expect(lastPlace(8).eloDelta).toBe(-7)
+  })
+
+  it('never returns a rating below the floor', () => {
+    for (const rating of [0, 1, 2, 3, 5, 8, 12, 100]) {
+      expect(lastPlace(rating).eloAfter).toBeGreaterThanOrEqual(MIN_ELO)
+    }
+  })
+
+  it('reports the delta it actually applied, so voiding rolls back exactly', () => {
+    // void_last_gp undoes a GP with `elo = elo - elo_delta`. If the delta were
+    // the unclamped one, that would restore a rating the player never had.
+    for (const rating of [0, 1, 2, 3, 5, 8, 12, 100]) {
+      const update = lastPlace(rating)
+      expect(update.eloBefore).toBe(rating)
+      expect(update.eloBefore + update.eloDelta).toBe(update.eloAfter)
+    }
+  })
+
+  it('takes a player already at the floor no further down', () => {
+    const update = lastPlace(MIN_ELO)
+    expect(update.eloAfter).toBe(MIN_ELO)
+    expect(update.eloDelta).toBe(0)
+  })
+
+  it('lets a player at the floor climb back out by winning', () => {
+    const [winner] = computeGpElo([
+      { playerId: 'floored', rating: MIN_ELO, points: 60, gpCount: 20 },
+      { playerId: 'rival', rating: 100, points: 30, gpCount: 20 },
+    ])
+    expect(winner.eloDelta).toBeGreaterThan(0)
+    expect(winner.eloAfter).toBeGreaterThan(MIN_ELO)
+  })
+
+  it('leaves a result nowhere near the floor untouched', () => {
+    for (const update of computeGpElo(lowField(100))) {
+      expect(update.eloAfter).toBe(update.eloBefore + update.eloDelta)
+      expect(update.eloAfter).toBeGreaterThan(MIN_ELO)
+    }
   })
 })

@@ -15,7 +15,14 @@ create extension if not exists pgcrypto;
 create table players (
   id            uuid primary key default gen_random_uuid(),
   name          text unique not null,
-  elo           numeric not null default 1500,
+  -- Where a new player starts, and the floor no rating may cross. Both are
+  -- mirrored by STARTING_ELO and MIN_ELO in web/src/lib/elo.ts, which document
+  -- the reasoning — change them together, and shift every existing rating by
+  -- the difference, or new players enter below the field they're rated against.
+  -- computeGpElo already clamps at the floor; the constraint is the backstop
+  -- that stops a stale or hand-rolled client writing a negative rating.
+  elo           numeric not null default 100
+                constraint players_elo_non_negative check (elo >= 0),
   gp_count      int not null default 0,
   created_at    timestamptz not null default now()
 );
