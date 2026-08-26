@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { loadHistory, rosterFromHistory, formatGpDate, type GrandPrix } from '../lib/history'
+import { rosterFromHistory, formatGpDate, type GrandPrix } from '../lib/history'
+import { loadHistory } from '../lib/loadHistory'
 import { headToHead } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 

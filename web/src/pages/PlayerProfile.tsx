@@ -9,12 +9,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import {
-  formatGpDate,
-  loadHistory,
-  rosterFromHistory,
-  type GrandPrix,
-} from '../lib/history'
+import { formatGpDate, rosterFromHistory, type GrandPrix } from '../lib/history'
+import { loadHistory } from '../lib/loadHistory'
 import {
   entryFor,
   gpsFor,

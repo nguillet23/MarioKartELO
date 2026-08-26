@@ -1,12 +1,16 @@
-// The full result history, loaded once and reused by every derived-stats
-// feature (head-to-head, streaks, personal bests, profiles, recaps).
+// The shape of the full result history, reused by every derived-stats feature
+// (head-to-head, streaks, personal bests, profiles, recaps).
 //
 // `gp_results` already holds everything those need — points and the exact
 // rating each player carried into and out of every grand prix — so none of
-// them need a schema change, just this one read and the pure functions in
+// them need a schema change, just one read and the pure functions in
 // `stats.ts`.
-
-import { supabase } from './supabaseClient'
+//
+// Deliberately imports nothing: the read itself lives in `loadHistory.ts`,
+// because `supabaseClient` throws at module load when its env vars are unset.
+// Importing it here would make every pure function below unusable without
+// database credentials — which is what broke the unit tests in CI, where the
+// test step runs before the build step that has the secrets.
 
 export interface GpEntry {
   playerId: string
@@ -26,7 +30,8 @@ export interface GrandPrix {
   entries: GpEntry[]
 }
 
-interface GpResultRaw {
+/** One `gp_results` row with its two to-one embeds, as PostgREST returns it. */
+export interface GpResultRow {
   grand_prix_id: string
   player_id: string
   points: number
@@ -44,7 +49,7 @@ interface GpResultRaw {
  * does it: PostgREST's `order` on a to-one embed (`grand_prix`) sorts within
  * the embed, not across rows, so asking the server for this is a no-op.
  */
-export function groupIntoGrandPrix(rows: GpResultRaw[]): GrandPrix[] {
+export function groupIntoGrandPrix(rows: GpResultRow[]): GrandPrix[] {
   const byGp = new Map<string, GrandPrix>()
 
   for (const row of rows) {
@@ -83,18 +88,6 @@ export function groupIntoGrandPrix(rows: GpResultRaw[]): GrandPrix[] {
   }
 
   return history
-}
-
-/** Every grand prix ever played, oldest first. */
-export async function loadHistory(): Promise<GrandPrix[]> {
-  const { data, error } = await supabase
-    .from('gp_results')
-    .select(
-      'grand_prix_id, player_id, points, elo_before, elo_after, elo_delta, grand_prix(played_at), players(name)',
-    )
-
-  if (error) throw new Error(error.message)
-  return groupIntoGrandPrix((data ?? []) as unknown as GpResultRaw[])
 }
 
 /** Everyone who has raced at least once, by display name. */
