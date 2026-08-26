@@ -9,6 +9,12 @@
 -- exists — skip those and run just the `create extension`, the three
 -- `create or replace function` blocks, and the `grant execute` lines to
 -- pick up any function changes without touching your existing rows.
+--
+-- One exception: `submit_gp` gained a third parameter (`played_at`, for
+-- backdating). `create or replace` cannot change a function's argument
+-- list, so on an existing database run
+-- `drop function if exists submit_gp(text, jsonb);` first, or the old
+-- 2-argument version lingers alongside the new one.
 
 create extension if not exists pgcrypto;
 
@@ -76,7 +82,9 @@ grant select on players, grand_prix, gp_results, player_stats to anon;
 -- can bypass RLS) and pins `search_path`, so a caller can't point an unqualified
 -- table name at a schema they control.
 
-create or replace function submit_gp(password text, results jsonb)
+-- `played_at` defaults to null, which resolves to now() below — the common
+-- case (the GP just happened) needs no argument at all.
+create or replace function submit_gp(password text, results jsonb, played_at timestamptz default null)
 returns uuid
 language plpgsql
 security definer
@@ -86,6 +94,8 @@ declare
   new_gp_id uuid;
   r jsonb;
   current_elo numeric;
+  resolved_played_at timestamptz := coalesce(played_at, now());
+  latest_played_at timestamptz;
 begin
   if not exists (
     select 1 from site_secret where password_hash = crypt(password, password_hash)
@@ -100,6 +110,22 @@ begin
   if (select count(distinct e.value->>'player_id') from jsonb_array_elements(results) e)
      <> jsonb_array_length(results) then
     raise exception 'the same player appears more than once in this grand prix';
+  end if;
+
+  if resolved_played_at > now() then
+    raise exception 'played_at cannot be in the future';
+  end if;
+
+  -- Every rating below is computed client-side against each player's
+  -- *current* elo, not whatever it was as of resolved_played_at. Backdating
+  -- is only safe when it slots in after everything already on record —
+  -- inserting it earlier would credit or charge players against ratings
+  -- they hadn't reached yet at that point in real history.
+  select max(g.played_at) into latest_played_at from grand_prix g;
+  if latest_played_at is not null and resolved_played_at < latest_played_at then
+    raise exception
+      'played_at (%) is before the most recent grand prix (%) - backdating can only fill in a gap after everything already on record',
+      resolved_played_at, latest_played_at;
   end if;
 
   -- Elo is computed client-side from the ratings the page loaded with. If
@@ -117,7 +143,7 @@ begin
     end if;
   end loop;
 
-  insert into grand_prix default values returning id into new_gp_id;
+  insert into grand_prix (played_at) values (resolved_played_at) returning id into new_gp_id;
 
   for r in select * from jsonb_array_elements(results) loop
     insert into gp_results (grand_prix_id, player_id, points, elo_before, elo_after, elo_delta)
@@ -205,7 +231,7 @@ begin
 end;
 $$;
 
-grant execute on function submit_gp(text, jsonb) to anon;
+grant execute on function submit_gp(text, jsonb, timestamptz) to anon;
 grant execute on function void_last_gp(text) to anon;
 grant execute on function add_player(text, text) to anon;
 

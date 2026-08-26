@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   CartesianGrid,
   Legend,
@@ -10,6 +10,9 @@ import {
   YAxis,
 } from 'recharts'
 import { supabase } from '../lib/supabaseClient'
+import { loadHistory } from '../lib/loadHistory'
+import { windowHistory, WINDOW_OPTIONS, type StatsWindow } from '../lib/stats'
+import type { GrandPrix } from '../lib/history'
 import PageHeader from '../components/PageHeader'
 
 // Mirrors the palette in index.css — Recharts sets `stroke` as an SVG
@@ -46,48 +49,32 @@ interface PlayerRaw {
   name: string
 }
 
-interface GpResultRaw {
-  player_id: string
-  elo_after: number
-  grand_prix: { played_at: string } | null
-}
-
 /** Rows are keyed by player *id*, never name — see the Line dataKey note below. */
 type ChartRow = Record<string, number>
 type ChartMode = 'elo' | 'rank'
 
-function buildChartData(results: GpResultRaw[], knownPlayerIds: Set<string>) {
-  const seriesByPlayer = new Map<string, { t: string; elo: number }[]>()
-  const timestampSet = new Set<string>()
-
-  for (const r of results) {
-    const t = r.grand_prix?.played_at
-    if (!t || !knownPlayerIds.has(r.player_id)) continue
-    timestampSet.add(t)
-    const list = seriesByPlayer.get(r.player_id) ?? []
-    list.push({ t, elo: r.elo_after })
-    seriesByPlayer.set(r.player_id, list)
-  }
-
-  const timestamps = [...timestampSet].sort()
-
+/**
+ * Rank is recomputed fresh from whatever slice of history is passed in, so a
+ * windowed chart shows who's ranked highest *within that window*, not their
+ * all-time position — consistent with a window restricting points-and-record
+ * stats rather than rating itself (see `windowHistory` in `stats.ts`).
+ */
+function buildChartData(history: GrandPrix[], knownPlayerIds: Set<string>) {
   const eloRows: ChartRow[] = []
   const rankRows: ChartRow[] = []
   const latestElo = new Map<string, number>()
 
-  timestamps.forEach((t, i) => {
+  history.forEach((gp, i) => {
     const eloRow: ChartRow = { seq: i + 1 }
-    for (const [playerId, series] of seriesByPlayer) {
-      const match = series.find((s) => s.t === t)
-      if (match) {
-        eloRow[playerId] = match.elo
-        latestElo.set(playerId, match.elo)
-      }
+    for (const entry of gp.entries) {
+      if (!knownPlayerIds.has(entry.playerId)) continue
+      eloRow[entry.playerId] = entry.eloAfter
+      latestElo.set(entry.playerId, entry.eloAfter)
     }
     eloRows.push(eloRow)
 
-    // Rank everyone who has raced so far, not just this GP's field, so a
-    // player's line holds its position through GPs they sat out.
+    // Rank everyone who has raced so far in this slice, not just this GP's
+    // field, so a player's line holds its position through GPs they sat out.
     const ranked = [...latestElo.entries()].sort((a, b) => b[1] - a[1])
     const rankRow: ChartRow = { seq: i + 1 }
     ranked.forEach(([playerId], idx) => {
@@ -97,6 +84,20 @@ function buildChartData(results: GpResultRaw[], knownPlayerIds: Set<string>) {
   })
 
   return { eloRows, rankRows }
+}
+
+/** Total and average points per player within a slice of history — the windowed stand-ins for `player_stats`'s all-time total_points/avg_points. */
+function windowedPointsByPlayer(history: GrandPrix[]): Map<string, { points: number; gpCount: number }> {
+  const totals = new Map<string, { points: number; gpCount: number }>()
+  for (const gp of history) {
+    for (const entry of gp.entries) {
+      const row = totals.get(entry.playerId) ?? { points: 0, gpCount: 0 }
+      row.points += entry.points
+      row.gpCount += 1
+      totals.set(entry.playerId, row)
+    }
+  }
+  return totals
 }
 
 function MiniLeaderboard({
@@ -138,37 +139,37 @@ function MiniLeaderboard({
 export default function Analytics() {
   const [stats, setStats] = useState<PlayerStatsRow[]>([])
   const [players, setPlayers] = useState<PlayerRaw[]>([])
-  const [eloRows, setEloRows] = useState<ChartRow[]>([])
-  const [rankRows, setRankRows] = useState<ChartRow[]>([])
+  const [history, setHistory] = useState<GrandPrix[]>([])
   const [mode, setMode] = useState<ChartMode>('elo')
+  const [statsWindow, setStatsWindow] = useState<StatsWindow>(WINDOW_OPTIONS[0].window)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   async function loadData() {
-    const [statsRes, playersRes, resultsRes] = await Promise.all([
+    const [statsRes, playersRes] = await Promise.all([
       supabase.from('player_stats').select('id, name, elo, gp_count, total_points, avg_points'),
       supabase.from('players').select('id, name').gt('gp_count', 0).order('name'),
-      supabase.from('gp_results').select('player_id, elo_after, grand_prix(played_at)'),
     ])
 
-    const firstError = statsRes.error ?? playersRes.error ?? resultsRes.error
+    const firstError = statsRes.error ?? playersRes.error
     if (firstError) {
       setError(firstError.message)
       setLoading(false)
       return
     }
 
-    const nextPlayers = (playersRes.data ?? []) as PlayerRaw[]
-    const results = (resultsRes.data ?? []) as unknown as GpResultRaw[]
-    const { eloRows: nextEloRows, rankRows: nextRankRows } = buildChartData(
-      results,
-      new Set(nextPlayers.map((p) => p.id)),
-    )
+    let nextHistory
+    try {
+      nextHistory = await loadHistory()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setLoading(false)
+      return
+    }
 
     setStats((statsRes.data ?? []) as PlayerStatsRow[])
-    setPlayers(nextPlayers)
-    setEloRows(nextEloRows)
-    setRankRows(nextRankRows)
+    setPlayers((playersRes.data ?? []) as PlayerRaw[])
+    setHistory(nextHistory)
     setError(null)
     setLoading(false)
   }
@@ -189,8 +190,20 @@ export default function Analytics() {
     }
   }, [])
 
+  const windowedHistory = useMemo(
+    () => windowHistory(history, statsWindow),
+    [history, statsWindow],
+  )
+
+  const { eloRows, rankRows } = useMemo(
+    () => buildChartData(windowedHistory, new Set(players.map((p) => p.id))),
+    [windowedHistory, players],
+  )
   const chartRows = mode === 'elo' ? eloRows : rankRows
   const maxRank = players.length
+
+  const windowedPoints = useMemo(() => windowedPointsByPlayer(windowedHistory), [windowedHistory])
+  const isWindowed = statsWindow.kind !== 'all'
 
   const modeButtonClass = (active: boolean) =>
     `rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${
@@ -212,7 +225,7 @@ export default function Analytics() {
 
       {!error && loading && <p className="text-sm text-haze">Loading results…</p>}
 
-      {!error && !loading && chartRows.length === 0 && (
+      {!error && !loading && history.length === 0 && (
         <div className="panel p-6 text-center">
           <p className="font-display text-lg font-bold text-chalk">Nothing to chart yet</p>
           <p className="mt-1 text-sm text-haze">
@@ -221,25 +234,49 @@ export default function Analytics() {
         </div>
       )}
 
-      {!error && !loading && chartRows.length > 0 && (
+      {!error && !loading && history.length > 0 && (
         <>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setMode('elo')}
-              className={modeButtonClass(mode === 'elo')}
-            >
-              Rating
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('rank')}
-              className={modeButtonClass(mode === 'rank')}
-            >
-              Position
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMode('elo')}
+                className={modeButtonClass(mode === 'elo')}
+              >
+                Rating
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('rank')}
+                className={modeButtonClass(mode === 'rank')}
+              >
+                Position
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {WINDOW_OPTIONS.map((opt) => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  onClick={() => setStatsWindow(opt.window)}
+                  className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    JSON.stringify(opt.window) === JSON.stringify(statsWindow)
+                      ? 'bg-gold text-asphalt'
+                      : 'border border-line text-haze hover:text-chalk'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
+          {chartRows.length === 0 && (
+            <p className="mt-4 text-sm text-haze">No grand prix in this window.</p>
+          )}
+
+          {chartRows.length > 0 && (
           <div className="panel mt-4 h-80 w-full p-4 pl-0">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartRows} margin={{ top: 8, right: 16, bottom: 16, left: 0 }}>
@@ -296,10 +333,11 @@ export default function Analytics() {
               </LineChart>
             </ResponsiveContainer>
           </div>
+          )}
 
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <MiniLeaderboard
-              title="Rating"
+              title="Rating (all-time)"
               rows={[...stats]
                 .sort((a, b) => b.elo - a.elo)
                 .map((s) => ({ id: s.id, name: s.name, value: s.elo }))}
@@ -307,16 +345,25 @@ export default function Analytics() {
             />
             <MiniLeaderboard
               title="Total points"
-              rows={[...stats]
-                .sort((a, b) => b.total_points - a.total_points)
-                .map((s) => ({ id: s.id, name: s.name, value: s.total_points }))}
+              rows={(isWindowed
+                ? players
+                    .map((p) => ({ id: p.id, name: p.name, value: windowedPoints.get(p.id)?.points ?? 0 }))
+                    .filter((r) => r.value > 0)
+                : stats.map((s) => ({ id: s.id, name: s.name, value: s.total_points }))
+              ).sort((a, b) => b.value - a.value)}
               formatValue={(v) => `${v}`}
             />
             <MiniLeaderboard
               title="Points per GP"
-              rows={[...stats]
-                .sort((a, b) => b.avg_points - a.avg_points)
-                .map((s) => ({ id: s.id, name: s.name, value: s.avg_points }))}
+              rows={(isWindowed
+                ? players
+                    .map((p) => {
+                      const row = windowedPoints.get(p.id)
+                      return { id: p.id, name: p.name, value: row ? row.points / row.gpCount : 0 }
+                    })
+                    .filter((r) => r.value > 0)
+                : stats.map((s) => ({ id: s.id, name: s.name, value: s.avg_points }))
+              ).sort((a, b) => b.value - a.value)}
               formatValue={(v) => Number(v).toFixed(1)}
             />
           </div>
