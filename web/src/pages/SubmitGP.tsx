@@ -6,7 +6,10 @@ import {
   MIN_GP_POINTS,
   type GpParticipant,
 } from '../lib/elo'
+import { loadHistory } from '../lib/history'
+import { buildRecap, type Recap } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
+import RecapCard from '../components/RecapCard'
 
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 12
@@ -56,6 +59,7 @@ export default function SubmitGP() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
 
+  const [recap, setRecap] = useState<Recap | null>(null)
   const [lastGp, setLastGp] = useState<LastGpEntry[] | null>(null)
   const [confirmingVoid, setConfirmingVoid] = useState(false)
   const [voiding, setVoiding] = useState(false)
@@ -188,13 +192,22 @@ export default function SubmitGP() {
         elo_delta: u.eloDelta,
       }))
 
-      const { error: submitError } = await supabase.rpc('submit_gp', {
+      const { data: newGpId, error: submitError } = await supabase.rpc('submit_gp', {
         password,
         results,
       })
       if (submitError) throw new Error(submitError.message)
 
       setSuccess(true)
+      // The recap needs the whole history, not just this GP: "personal best"
+      // and "new peak" only mean something next to what came before.
+      try {
+        setRecap(buildRecap(await loadHistory(), newGpId as string))
+      } catch {
+        // A recap is a nice-to-have. The grand prix is already saved, and
+        // saying it failed because the summary didn't load would be a lie.
+        setRecap(null)
+      }
       setEntries(makeDefaultEntries())
       setPassword('')
       setConfirmingVoid(false)
@@ -224,6 +237,7 @@ export default function SubmitGP() {
       setVoidSuccess(true)
       setConfirmingVoid(false)
       setSuccess(false)
+      setRecap(null)
       await Promise.all([loadRoster(), loadLastGp()])
     } catch (err) {
       setVoidError(err instanceof Error ? err.message : 'The grand prix was not voided.')
@@ -349,6 +363,12 @@ export default function SubmitGP() {
           {submitting ? 'Saving…' : 'Submit grand prix'}
         </button>
       </form>
+
+      {recap && (
+        <div className="mt-8">
+          <RecapCard recap={recap} />
+        </div>
+      )}
 
       <section className="mt-12">
         <h2 className="font-display text-lg font-bold uppercase tracking-tight text-chalk">

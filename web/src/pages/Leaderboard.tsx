@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
+import { loadHistory } from '../lib/history'
+import { playersAtPeak } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 import Ordinal from '../components/Ordinal'
 
@@ -11,6 +13,8 @@ interface LeaderboardRow {
   gpCount: number
   lastDelta: number | null
   rank: number
+  /** Sitting at their highest rating ever, right now. */
+  atPeak: boolean
 }
 
 interface PlayerRaw {
@@ -18,12 +22,6 @@ interface PlayerRaw {
   name: string
   elo: number
   gp_count: number
-}
-
-interface GpResultRaw {
-  player_id: string
-  elo_delta: number
-  grand_prix: { played_at: string } | null
 }
 
 function DeltaChip({ delta }: { delta: number | null }) {
@@ -44,40 +42,34 @@ export default function Leaderboard() {
   const [error, setError] = useState<string | null>(null)
 
   async function loadLeaderboard() {
-    const [playersRes, resultsRes] = await Promise.all([
-      supabase
-        .from('players')
-        .select('id, name, elo, gp_count')
-        .gt('gp_count', 0)
-        .order('elo', { ascending: false }),
-      supabase.from('gp_results').select('player_id, elo_delta, grand_prix(played_at)'),
-    ])
+    const playersRes = await supabase
+      .from('players')
+      .select('id, name, elo, gp_count')
+      .gt('gp_count', 0)
+      .order('elo', { ascending: false })
 
     if (playersRes.error) {
       setError(playersRes.error.message)
       setLoading(false)
       return
     }
-    if (resultsRes.error) {
-      setError(resultsRes.error.message)
+
+    let history
+    try {
+      history = await loadHistory()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
       setLoading(false)
       return
     }
 
-    // Sorted here rather than in the query: PostgREST's `order` on an embedded
-    // resource sorts rows *within* each embed, and `grand_prix` is a to-one
-    // embed, so asking the server for this ordering is a no-op — the rows come
-    // back in arbitrary order and "last GP" would be whichever landed first.
-    const results = [...((resultsRes.data ?? []) as unknown as GpResultRaw[])].sort(
-      (a, b) => (b.grand_prix?.played_at ?? '').localeCompare(a.grand_prix?.played_at ?? ''),
-    )
-
+    // History comes back oldest first, so the last entry for a player is their
+    // most recent grand prix.
     const lastDeltaByPlayer = new Map<string, number>()
-    for (const r of results) {
-      if (!lastDeltaByPlayer.has(r.player_id)) {
-        lastDeltaByPlayer.set(r.player_id, r.elo_delta)
-      }
+    for (const gp of history) {
+      for (const entry of gp.entries) lastDeltaByPlayer.set(entry.playerId, entry.eloDelta)
     }
+    const atPeak = playersAtPeak(history)
 
     const players = (playersRes.data ?? []) as PlayerRaw[]
     let lastElo: number | null = null
@@ -98,6 +90,7 @@ export default function Leaderboard() {
           gpCount: p.gp_count,
           lastDelta: lastDeltaByPlayer.get(p.id) ?? null,
           rank: lastRank,
+          atPeak: atPeak.has(p.id),
         }
       }),
     )
@@ -167,9 +160,24 @@ export default function Leaderboard() {
                 <Ordinal rank={row.rank} className="text-2xl" />
 
                 <div className="min-w-0">
-                  <p className="truncate font-display text-base font-bold text-chalk">{row.name}</p>
-                  <p className="text-xs text-haze">
-                    {row.gpCount} {row.gpCount === 1 ? 'GP' : 'GPs'}
+                  <Link
+                    to={`/player/${row.id}`}
+                    className="block truncate font-display text-base font-bold text-chalk transition-colors hover:text-gold"
+                  >
+                    {row.name}
+                  </Link>
+                  <p className="flex items-center gap-2 text-xs text-haze">
+                    <span>
+                      {row.gpCount} {row.gpCount === 1 ? 'GP' : 'GPs'}
+                    </span>
+                    {row.atPeak && (
+                      <span
+                        className="rounded border border-gold/40 bg-gold/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gold"
+                        title="At their highest rating ever"
+                      >
+                        Peak
+                      </span>
+                    )}
                   </p>
                 </div>
 
