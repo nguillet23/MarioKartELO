@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { loadHistory } from '../lib/loadHistory'
-import { playersAtPeak } from '../lib/stats'
+import { attendance, FORM_WINDOW, playersAtPeak, recentForm, type AttendanceInfo } from '../lib/stats'
+import { formatGpDate } from '../lib/history'
 import PageHeader from '../components/PageHeader'
 import Ordinal from '../components/Ordinal'
 
@@ -11,7 +12,8 @@ interface LeaderboardRow {
   name: string
   elo: number
   gpCount: number
-  lastDelta: number | null
+  /** Elo gained or lost across their last FORM_WINDOW GPs — who's hot right now. */
+  form: number
   rank: number
   /** Sitting at their highest rating ever, right now. */
   atPeak: boolean
@@ -24,20 +26,20 @@ interface PlayerRaw {
   gp_count: number
 }
 
-function DeltaChip({ delta }: { delta: number | null }) {
-  if (delta === null) return <span className="font-mono text-xs text-haze">—</span>
-
-  const tone = delta > 0 ? 'text-boost' : delta < 0 ? 'text-spin' : 'text-haze'
+function FormChip({ form }: { form: number }) {
+  const tone = form > 0 ? 'text-boost' : form < 0 ? 'text-spin' : 'text-haze'
+  const arrow = form > 0 ? '▲' : form < 0 ? '▼' : ''
   return (
-    <span className={`font-mono text-xs ${tone}`}>
-      {delta > 0 ? '+' : ''}
-      {delta}
+    <span className={`font-mono text-xs ${tone}`} title={`Elo over the last ${FORM_WINDOW} GPs`}>
+      {arrow} {form > 0 ? '+' : ''}
+      {form}
     </span>
   )
 }
 
 export default function Leaderboard() {
   const [rows, setRows] = useState<LeaderboardRow[]>([])
+  const [attendanceRows, setAttendanceRows] = useState<AttendanceInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,13 +65,8 @@ export default function Leaderboard() {
       return
     }
 
-    // History comes back oldest first, so the last entry for a player is their
-    // most recent grand prix.
-    const lastDeltaByPlayer = new Map<string, number>()
-    for (const gp of history) {
-      for (const entry of gp.entries) lastDeltaByPlayer.set(entry.playerId, entry.eloDelta)
-    }
     const atPeak = playersAtPeak(history)
+    setAttendanceRows(attendance(history))
 
     const players = (playersRes.data ?? []) as PlayerRaw[]
     let lastElo: number | null = null
@@ -88,7 +85,7 @@ export default function Leaderboard() {
           name: p.name,
           elo: p.elo,
           gpCount: p.gp_count,
-          lastDelta: lastDeltaByPlayer.get(p.id) ?? null,
+          form: recentForm(history, p.id),
           rank: lastRank,
           atPeak: atPeak.has(p.id),
         }
@@ -145,7 +142,7 @@ export default function Leaderboard() {
         <>
           <div className="mb-2 flex items-center justify-between px-4 text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
             <span>Racer</span>
-            <span>Rating / last GP</span>
+            <span>Rating / form</span>
           </div>
 
           <ol className="panel divide-y divide-line overflow-hidden">
@@ -183,11 +180,47 @@ export default function Leaderboard() {
 
                 <div className="text-right">
                   <p className="font-mono text-lg leading-tight text-chalk">{row.elo}</p>
-                  <DeltaChip delta={row.lastDelta} />
+                  <FormChip form={row.form} />
                 </div>
               </li>
             ))}
           </ol>
+
+          {attendanceRows.length > 0 && (
+            <>
+              <h2 className="mt-10 font-display text-lg font-bold uppercase tracking-tight text-chalk">
+                Attendance
+              </h2>
+              <p className="mt-1 text-sm text-haze">Who we've seen lately, and who we're missing.</p>
+
+              <ol className="panel mt-3 divide-y divide-line">
+                {attendanceRows.map((row) => (
+                  <li
+                    key={row.playerId}
+                    className="flex items-center justify-between gap-3 px-4 py-3"
+                  >
+                    <Link
+                      to={`/player/${row.playerId}`}
+                      className="min-w-0 truncate font-display text-sm font-bold text-chalk hover:text-gold"
+                    >
+                      {row.playerName}
+                    </Link>
+                    <span className="flex shrink-0 items-center gap-3 text-xs">
+                      {row.drifted && (
+                        <span className="rounded border border-line bg-pit-hi px-1.5 py-0.5 font-bold uppercase tracking-wider text-haze">
+                          Away
+                        </span>
+                      )}
+                      <span className="text-haze">{row.gpsThisMonth} this month</span>
+                      <span className={row.drifted ? 'text-spin' : 'text-chalk'}>
+                        Last seen {formatGpDate(row.lastPlayedAt)}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
         </>
       )}
     </div>

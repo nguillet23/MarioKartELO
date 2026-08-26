@@ -12,10 +12,12 @@ import {
 import { formatGpDate, rosterFromHistory, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
 import {
+  consistencyRankings,
   entryFor,
   gpsFor,
   opponentRecords,
   playerBests,
+  pointsConsistency,
   rivalOf,
   streaksFor,
 } from '../lib/stats'
@@ -81,6 +83,14 @@ export default function PlayerProfile() {
   const streaks = useMemo(() => streaksFor(history, playerId), [history, playerId])
   const rival = useMemo(() => rivalOf(history, playerId), [history, playerId])
   const opponents = useMemo(() => opponentRecords(history, playerId), [history, playerId])
+  const consistency = useMemo(() => pointsConsistency(history, playerId), [history, playerId])
+  const consistencyTag = useMemo(() => {
+    const rankings = consistencyRankings(history)
+    if (rankings.length < 2) return null
+    if (rankings[0].playerId === playerId) return 'Most consistent'
+    if (rankings[rankings.length - 1].playerId === playerId) return 'Most volatile'
+    return null
+  }, [history, playerId])
 
   const gps = useMemo(() => gpsFor(history, playerId), [history, playerId])
   const chartRows = useMemo(
@@ -158,6 +168,14 @@ export default function PlayerProfile() {
           hint={bests.bestPointsAt ? formatGpDate(bests.bestPointsAt) : undefined}
         />
         <Stat label="Worst GP" value={`${bests.worstPoints}`} />
+        {consistency && (
+          <Stat
+            label="Consistency"
+            value={consistency.stdDev.toFixed(1)}
+            hint={consistencyTag ?? 'Points std. dev.'}
+            tone={consistencyTag ? 'text-gold' : 'text-chalk'}
+          />
+        )}
       </div>
 
       {rival && (

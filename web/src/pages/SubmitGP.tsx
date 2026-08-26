@@ -118,6 +118,32 @@ export default function SubmitGP() {
     [entries],
   )
 
+  // A preview, not the real computation: it runs off the roster loaded when
+  // the page opened, not a fresh read, so it can drift from what actually
+  // gets saved if someone else submits a GP in the meantime. handleSubmit
+  // re-reads ratings right before the real computation for that reason.
+  const preview = useMemo(() => {
+    if (entries.some((e) => e.playerId === UNSELECTED)) return null
+
+    const ids = entries.map((e) => e.playerId)
+    if (new Set(ids).size !== ids.length) return null
+
+    const participants: GpParticipant[] = []
+    for (const entry of entries) {
+      const points = Number(entry.points)
+      if (!Number.isInteger(points) || points < MIN_GP_POINTS || points > MAX_GP_POINTS) return null
+      const player = roster.find((p) => p.id === entry.playerId)
+      if (!player) return null
+      participants.push({ playerId: entry.playerId, rating: player.elo, points, gpCount: player.gp_count })
+    }
+
+    try {
+      return new Map(computeGpElo(participants).map((u) => [u.playerId, u.eloDelta]))
+    } catch {
+      return null
+    }
+  }, [entries, roster])
+
   function updateEntry(key: string, patch: Partial<Entry>) {
     setEntries((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)))
   }
@@ -305,6 +331,27 @@ export default function SubmitGP() {
                   aria-label={`Points in slot ${index + 1}`}
                   className="field w-20 shrink-0 text-center font-mono"
                 />
+
+                <span
+                  className={`w-12 shrink-0 text-center font-mono text-xs ${
+                    entry.playerId === UNSELECTED
+                      ? 'text-haze'
+                      : (preview?.get(entry.playerId) ?? 0) > 0
+                        ? 'text-boost'
+                        : (preview?.get(entry.playerId) ?? 0) < 0
+                          ? 'text-spin'
+                          : 'text-haze'
+                  }`}
+                  aria-label={
+                    preview?.has(entry.playerId)
+                      ? `Projected rating change: ${preview.get(entry.playerId)}`
+                      : undefined
+                  }
+                >
+                  {entry.playerId !== UNSELECTED && preview?.has(entry.playerId)
+                    ? `${(preview.get(entry.playerId) ?? 0) > 0 ? '+' : ''}${preview.get(entry.playerId)}`
+                    : '—'}
+                </span>
 
                 <button
                   type="button"

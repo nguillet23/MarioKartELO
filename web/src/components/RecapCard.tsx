@@ -37,6 +37,11 @@ function Badge({ label, tone }: { label: string; tone: 'gold' | 'boost' | 'spin'
   )
 }
 
+/** "0.20 win probability" reads as "5:1 against" — the group chat's language. */
+function oddsAgainst(expected: number): string {
+  return `${((1 - expected) / expected).toFixed(1)}:1`
+}
+
 function badgesFor(entry: RecapEntry) {
   // A debut is every kind of record at once, so it stands in for all of them.
   if (entry.debut) return [{ label: 'Debut', tone: 'haze' as const }]
@@ -45,6 +50,7 @@ function badgesFor(entry: RecapEntry) {
   if (entry.peakElo) badges.push({ label: 'Peak Elo', tone: 'gold' })
   if (entry.bestPoints) badges.push({ label: 'Best GP', tone: 'boost' })
   if (entry.worstPoints) badges.push({ label: 'Worst GP', tone: 'spin' })
+  if (entry.upset) badges.push({ label: `Upset (${oddsAgainst(entry.upset.expected)})`, tone: 'gold' })
   return badges
 }
 
@@ -74,7 +80,7 @@ export default function RecapCard({ recap }: { recap: Recap }) {
     }
   }
 
-  const { biggestGainer, biggestLoser } = recap
+  const { biggestGainer, biggestLoser, biggestUpset } = recap
   const swung = biggestGainer.eloDelta > 0 || biggestLoser.eloDelta < 0
 
   return (
@@ -127,6 +133,14 @@ export default function RecapCard({ recap }: { recap: Recap }) {
           <span className="text-chalk">{biggestLoser.playerName}</span> gave up the most (
           <Delta value={biggestLoser.eloDelta} />
           ).
+        </p>
+      )}
+
+      {biggestUpset?.upset && (
+        <p className="border-t border-line px-4 py-3 text-sm text-haze">
+          <span className="text-chalk">{biggestUpset.playerName}</span> pulled the upset of the
+          night, beating <span className="text-chalk">{biggestUpset.upset.opponentName}</span> at{' '}
+          <span className="text-gold">{oddsAgainst(biggestUpset.upset.expected)}</span> against.
         </p>
       )}
 

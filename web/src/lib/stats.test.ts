@@ -2,11 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { computeGpElo, STARTING_ELO } from './elo'
 import { groupIntoGrandPrix, type GrandPrix } from './history'
 import {
+  attendance,
   buildRecap,
+  buildRecordsBook,
+  consistencyRankings,
   headToHead,
   opponentRecords,
   playerBests,
   playersAtPeak,
+  pointsConsistency,
+  recentForm,
   rivalOf,
   streaksFor,
 } from './stats'
@@ -356,5 +361,204 @@ describe('buildRecap', () => {
 
   it('is null for a grand prix id that is not in the history', () => {
     expect(buildRecap(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nope')).toBeNull()
+  })
+
+  it('flags an upset when a big underdog beats a big favorite', () => {
+    const history = makeHistory([
+      { field: [['a', 60], ['b', 4]] },
+      { field: [['a', 60], ['b', 4]] },
+      { field: [['a', 60], ['b', 4]] },
+      { field: [['b', 60], ['a', 4]] },
+    ])
+    const recap = buildRecap(history, 'gp-4')!
+    const b = recap.entries.find((e) => e.playerId === 'b')!
+
+    expect(b.upset).not.toBeNull()
+    expect(b.upset!.opponentId).toBe('a')
+    expect(recap.biggestUpset?.playerId).toBe('b')
+  })
+
+  it('does not flag a win as an upset when the winner was already favored', () => {
+    const recap = buildRecap(makeHistory([{ field: [['a', 60], ['b', 4]] }]), 'gp-1')!
+    expect(recap.entries.every((e) => e.upset === null)).toBe(true)
+    expect(recap.biggestUpset).toBeNull()
+  })
+})
+
+describe('recentForm', () => {
+  it('sums Elo change over the last N GPs, not the full history', () => {
+    const history = makeHistory([
+      { field: [['a', 60], ['b', 4]] },
+      { field: [['a', 60], ['b', 4]] },
+      { field: [['a', 4], ['b', 60]] },
+    ])
+    const lastTwoDeltas = history
+      .slice(-2)
+      .map((gp) => gp.entries.find((e) => e.playerId === 'a')!.eloDelta)
+
+    expect(recentForm(history, 'a', 2)).toBe(lastTwoDeltas.reduce((sum, d) => sum + d, 0))
+  })
+
+  it('sums whatever is available when a player has fewer GPs than the window', () => {
+    const history = makeHistory([{ field: [['a', 40], ['b', 20]] }])
+    const delta = history[0].entries.find((e) => e.playerId === 'a')!.eloDelta
+    expect(recentForm(history, 'a', 5)).toBe(delta)
+  })
+
+  it('is zero for a player with no history', () => {
+    expect(recentForm(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nobody')).toBe(0)
+  })
+})
+
+describe('pointsConsistency', () => {
+  it('is zero for a player who scores the same every GP', () => {
+    const history = makeHistory([
+      { field: [['a', 30], ['b', 20]] },
+      { field: [['a', 30], ['b', 40]] },
+      { field: [['a', 30], ['b', 10]] },
+    ])
+    expect(pointsConsistency(history, 'a')!.stdDev).toBe(0)
+  })
+
+  it('is higher for a player whose scores swing wildly than one who stays close to their average', () => {
+    const swingy = pointsConsistency(
+      makeHistory([
+        { field: [['a', 60], ['b', 20]] },
+        { field: [['a', 4], ['b', 40]] },
+        { field: [['a', 60], ['b', 10]] },
+      ]),
+      'a',
+    )!
+    const steady = pointsConsistency(
+      makeHistory([
+        { field: [['c', 30], ['d', 20]] },
+        { field: [['c', 32], ['d', 40]] },
+        { field: [['c', 28], ['d', 10]] },
+      ]),
+      'c',
+    )!
+
+    expect(swingy.stdDev).toBeGreaterThan(steady.stdDev)
+  })
+
+  it('is null for a player who has never raced', () => {
+    expect(pointsConsistency(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nobody')).toBeNull()
+  })
+})
+
+describe('consistencyRankings', () => {
+  it('ranks steadiest first', () => {
+    const history = makeHistory([
+      { field: [['a', 30], ['b', 20], ['c', 10]] },
+      { field: [['a', 30], ['b', 50], ['c', 15]] },
+      { field: [['a', 30], ['b', 8], ['c', 20]] },
+    ])
+    const rankings = consistencyRankings(history, 3)
+    expect(rankings[0].playerId).toBe('a')
+    expect(rankings[rankings.length - 1].playerId).toBe('b')
+  })
+
+  it('excludes a player with fewer than minGps GPs', () => {
+    const history = makeHistory([
+      { field: [['a', 30], ['b', 20]] },
+      { field: [['a', 30], ['c', 10]] },
+    ])
+    expect(consistencyRankings(history, 2).some((r) => r.playerId === 'c')).toBe(false)
+  })
+})
+
+describe('attendance', () => {
+  it('reports days since last played and this-month GP count', () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 20]] },
+      { field: [['a', 40], ['b', 20]] },
+    ])
+    const info = attendance(history, new Date('2026-01-10T00:00:00Z')).find(
+      (r) => r.playerId === 'a',
+    )!
+
+    expect(info.daysSinceLastPlayed).toBe(7)
+    expect(info.gpsThisMonth).toBe(2)
+    expect(info.drifted).toBe(false)
+  })
+
+  it('flags a player as drifted once they cross the threshold', () => {
+    const history = makeHistory([{ field: [['a', 40], ['b', 20]] }])
+    const info = attendance(history, new Date('2026-03-01T00:00:00Z')).find(
+      (r) => r.playerId === 'a',
+    )!
+    expect(info.drifted).toBe(true)
+  })
+
+  it('sorts most recently active first', () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 20]] },
+      { field: [['b', 40], ['c', 20]] },
+    ])
+    const ids = attendance(history, new Date('2026-01-10T00:00:00Z')).map((r) => r.playerId)
+    expect(ids[ids.length - 1]).toBe('a')
+  })
+})
+
+describe('buildRecordsBook', () => {
+  it('finds the highest and worst single-GP points', () => {
+    const book = buildRecordsBook(
+      makeHistory([
+        { field: [['a', 60], ['b', 20]] },
+        { field: [['a', 30], ['b', 4]] },
+      ]),
+    )
+    expect(book.highestPoints).toMatchObject({ playerId: 'a', value: 60 })
+    expect(book.worstPoints).toMatchObject({ playerId: 'b', value: 4 })
+  })
+
+  it('finds the closest GP and the biggest blowout', () => {
+    const book = buildRecordsBook(
+      makeHistory([
+        { field: [['a', 32], ['b', 30]] },
+        { field: [['a', 60], ['b', 4]] },
+      ]),
+    )
+    expect(book.closestGp?.spread).toBe(2)
+    expect(book.biggestBlowout?.spread).toBe(56)
+  })
+
+  it('finds the longest win streak across everyone', () => {
+    const book = buildRecordsBook(
+      makeHistory([
+        { field: [['a', 40], ['b', 10]] },
+        { field: [['a', 40], ['b', 10]] },
+        { field: [['a', 40], ['b', 10]] },
+      ]),
+    )
+    expect(book.longestStreak).toEqual({ playerId: 'a', playerName: 'A', length: 3 })
+  })
+
+  it('finds the biggest upset across the whole history', () => {
+    const book = buildRecordsBook(
+      makeHistory([
+        { field: [['a', 60], ['b', 4]] },
+        { field: [['a', 60], ['b', 4]] },
+        { field: [['a', 60], ['b', 4]] },
+        { field: [['b', 60], ['a', 4]] },
+      ]),
+    )
+    expect(book.biggestUpset?.playerId).toBe('b')
+  })
+
+  it('counts the most GPs played on one calendar date', () => {
+    // makeHistory spaces GPs a day apart, so each date has exactly one GP.
+    const book = buildRecordsBook(
+      makeHistory([
+        { field: [['a', 40], ['b', 10]] },
+        { field: [['a', 40], ['b', 10]] },
+      ]),
+    )
+    expect(book.biggestNight?.count).toBe(1)
+  })
+
+  it('is all null for an empty history', () => {
+    const book = buildRecordsBook([])
+    expect(Object.values(book).every((v) => v === null)).toBe(true)
   })
 })

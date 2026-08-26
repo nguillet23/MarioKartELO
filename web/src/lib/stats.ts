@@ -6,7 +6,8 @@
 // a new table: `gp_results` already stores each player's points and the exact
 // rating they carried into and out of every GP.
 
-import { pairwiseEloExchange } from './elo'
+import { expectedScore, pairwiseEloExchange } from './elo'
+import { rosterFromHistory } from './history'
 import type { GrandPrix, GpEntry } from './history'
 
 /** One GP two specific players both raced in. */
@@ -204,6 +205,24 @@ export function streaksFor(history: GrandPrix[], playerId: string): StreakInfo {
   return { current, longest }
 }
 
+/** How many of a player's most recent GPs count toward their "form" figure. */
+export const FORM_WINDOW = 5
+
+/**
+ * Elo gained (or lost) across a player's last `window` GPs — "who's hot right
+ * now" next to the all-time rating on the Leaderboard, as opposed to the
+ * rating itself, which never forgets. Fewer than `window` GPs played sums
+ * whatever they've got.
+ */
+export function recentForm(
+  history: GrandPrix[],
+  playerId: string,
+  window: number = FORM_WINDOW,
+): number {
+  const gps = gpsFor(history, playerId).slice(-window)
+  return gps.reduce((sum, gp) => sum + (entryFor(gp, playerId)?.eloDelta ?? 0), 0)
+}
+
 /**
  * Peak rating, best and worst GP, and whether this player is at their all-time
  * high right now.
@@ -276,6 +295,40 @@ export function playersAtPeak(history: GrandPrix[]): Set<string> {
   return atPeak
 }
 
+/**
+ * Expected-score ceiling for counting a win as an upset: 0.25 means the
+ * winner was no better than a 3:1 underdog per pre-GP ratings. `expectedScore`
+ * already turns two ratings into odds; this just names the cutoff.
+ */
+export const UPSET_EXPECTED_THRESHOLD = 0.25
+
+export interface Upset {
+  opponentId: string
+  opponentName: string
+  /** The winner's win probability against that opponent, per pre-GP ratings. */
+  expected: number
+}
+
+/**
+ * The most lopsided opponent this player beat in this GP by points, or null
+ * if they didn't beat anyone they weren't expected to. "Beat" means
+ * out-scored, same as everywhere else in this file — not finishing position.
+ */
+function biggestUpsetIn(gp: GrandPrix, playerId: string): Upset | null {
+  const me = entryFor(gp, playerId)
+  if (!me) return null
+
+  let best: Upset | null = null
+  for (const other of gp.entries) {
+    if (other.playerId === playerId || me.points <= other.points) continue
+    const expected = expectedScore(me.eloBefore, other.eloBefore)
+    if (expected <= UPSET_EXPECTED_THRESHOLD && (!best || expected < best.expected)) {
+      best = { opponentId: other.playerId, opponentName: other.playerName, expected }
+    }
+  }
+  return best
+}
+
 export interface RecapEntry extends GpEntry {
   /** This GP put the player at a rating they have never been above. */
   peakElo: boolean
@@ -285,6 +338,8 @@ export interface RecapEntry extends GpEntry {
   worstPoints: boolean
   /** Their very first grand prix. */
   debut: boolean
+  /** The most lopsided opponent they beat this GP by points, if any. */
+  upset: Upset | null
 }
 
 export interface Recap {
@@ -293,6 +348,8 @@ export interface Recap {
   entries: RecapEntry[]
   biggestGainer: RecapEntry
   biggestLoser: RecapEntry
+  /** Whoever pulled the least likely win of the night, if anyone did. */
+  biggestUpset: RecapEntry | null
 }
 
 /**
@@ -326,15 +383,256 @@ export function buildRecap(history: GrandPrix[], grandPrixId: string): Recap | n
       bestPoints: priorEntries.length > 0 && priorEntries.every((e) => entry.points > e.points),
       worstPoints: priorEntries.length > 0 && priorEntries.every((e) => entry.points < e.points),
       debut: priorEntries.length === 0,
+      upset: biggestUpsetIn(grandPrix, entry.playerId),
     }
   })
 
   const byDelta = [...entries].sort((a, b) => b.eloDelta - a.eloDelta)
+  const upsets = entries.filter((e) => e.upset !== null)
+  const biggestUpset =
+    upsets.length > 0
+      ? upsets.reduce((best, e) => (e.upset!.expected < best.upset!.expected ? e : best))
+      : null
 
   return {
     grandPrix,
     entries,
     biggestGainer: byDelta[0],
     biggestLoser: byDelta[byDelta.length - 1],
+    biggestUpset,
+  }
+}
+
+/** A player needs at least this many GPs before a consistency figure means anything. */
+export const CONSISTENCY_MIN_GPS = 3
+
+export interface ConsistencyInfo {
+  gpCount: number
+  /** Population standard deviation of points across every GP this player has entered. Lower is steadier. */
+  stdDev: number
+}
+
+/** How steady a player's points totals have been. Null if they've never raced. */
+export function pointsConsistency(history: GrandPrix[], playerId: string): ConsistencyInfo | null {
+  const gps = gpsFor(history, playerId)
+  if (gps.length === 0) return null
+
+  const points = gps.map((gp) => entryFor(gp, playerId)!.points)
+  const mean = points.reduce((sum, p) => sum + p, 0) / points.length
+  const variance = points.reduce((sum, p) => sum + (p - mean) ** 2, 0) / points.length
+
+  return { gpCount: points.length, stdDev: Math.sqrt(variance) }
+}
+
+export interface ConsistencyRanking {
+  playerId: string
+  playerName: string
+  stdDev: number
+}
+
+/**
+ * Every eligible player (at least `minGps`), steadiest first. The two ends of
+ * this list are the "most consistent" / "most volatile" chips on a profile.
+ */
+export function consistencyRankings(
+  history: GrandPrix[],
+  minGps: number = CONSISTENCY_MIN_GPS,
+): ConsistencyRanking[] {
+  return rosterFromHistory(history)
+    .map((p) => {
+      const info = pointsConsistency(history, p.id)
+      return info && info.gpCount >= minGps
+        ? { playerId: p.id, playerName: p.name, stdDev: info.stdDev }
+        : null
+    })
+    .filter((r): r is ConsistencyRanking => r !== null)
+    .sort((a, b) => a.stdDev - b.stdDev)
+}
+
+/** A player who hasn't played in this many days shows as drifted. */
+export const ATTENDANCE_DRIFT_DAYS = 14
+
+export interface AttendanceInfo {
+  playerId: string
+  playerName: string
+  lastPlayedAt: string
+  daysSinceLastPlayed: number
+  gpsThisMonth: number
+  drifted: boolean
+}
+
+/**
+ * Last-seen date and this-month GP count for every player who has ever
+ * raced, most recently active first — off `played_at` alone, so it needs no
+ * new table. Answers "who are we missing tonight".
+ */
+export function attendance(history: GrandPrix[], now: Date = new Date()): AttendanceInfo[] {
+  const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+
+  return rosterFromHistory(history)
+    .map((p) => {
+      const gps = gpsFor(history, p.id)
+      const lastPlayedAt = gps[gps.length - 1].playedAt
+      const daysSinceLastPlayed = Math.floor(
+        (now.getTime() - new Date(lastPlayedAt).getTime()) / (1000 * 60 * 60 * 24),
+      )
+      const gpsThisMonth = gps.filter((gp) => gp.playedAt.slice(0, 7) === monthKey).length
+
+      return {
+        playerId: p.id,
+        playerName: p.name,
+        lastPlayedAt,
+        daysSinceLastPlayed,
+        gpsThisMonth,
+        drifted: daysSinceLastPlayed >= ATTENDANCE_DRIFT_DAYS,
+      }
+    })
+    .sort((a, b) => a.daysSinceLastPlayed - b.daysSinceLastPlayed)
+}
+
+export interface GpRecord {
+  grandPrixId: string
+  playedAt: string
+  playerId: string
+  playerName: string
+  value: number
+}
+
+export interface SpreadRecord {
+  grandPrixId: string
+  playedAt: string
+  spread: number
+}
+
+export interface StreakRecord {
+  playerId: string
+  playerName: string
+  length: number
+}
+
+export interface UpsetRecord {
+  grandPrixId: string
+  playedAt: string
+  playerId: string
+  playerName: string
+  opponentName: string
+  /** The upset winner's win probability per pre-GP ratings — lower is a bigger upset. */
+  expected: number
+}
+
+export interface NightRecord {
+  /** Calendar date the GPs were played on, e.g. "2026-08-25" — UTC, not local. */
+  date: string
+  count: number
+}
+
+export interface RecordsBook {
+  highestPoints: GpRecord | null
+  worstPoints: GpRecord | null
+  biggestSwing: GpRecord | null
+  longestStreak: StreakRecord | null
+  biggestUpset: UpsetRecord | null
+  closestGp: SpreadRecord | null
+  biggestBlowout: SpreadRecord | null
+  biggestNight: NightRecord | null
+}
+
+/**
+ * All-time superlatives, one scan over the whole history. Every field is a
+ * plain reduce — `gp_results` already has everything, so none of this needs a
+ * new table.
+ *
+ * "Biggest night" groups by calendar date alone, not the gap-based session
+ * grouping PLAN.md's Sessions feature would add — a good enough stand-in until
+ * that exists, and harmless once it does (real sessions would only ever merge
+ * counts this already tracks separately).
+ */
+export function buildRecordsBook(history: GrandPrix[]): RecordsBook {
+  let highestPoints: GpRecord | null = null
+  let worstPoints: GpRecord | null = null
+  let biggestSwing: GpRecord | null = null
+  let biggestUpset: UpsetRecord | null = null
+  let closestGp: SpreadRecord | null = null
+  let biggestBlowout: SpreadRecord | null = null
+  const nightCounts = new Map<string, number>()
+
+  for (const gp of history) {
+    const date = gp.playedAt.slice(0, 10)
+    nightCounts.set(date, (nightCounts.get(date) ?? 0) + 1)
+
+    // Entries are already sorted highest points first (groupIntoGrandPrix).
+    const spread = gp.entries[0].points - gp.entries[gp.entries.length - 1].points
+    if (!closestGp || spread < closestGp.spread) {
+      closestGp = { grandPrixId: gp.id, playedAt: gp.playedAt, spread }
+    }
+    if (!biggestBlowout || spread > biggestBlowout.spread) {
+      biggestBlowout = { grandPrixId: gp.id, playedAt: gp.playedAt, spread }
+    }
+
+    for (const entry of gp.entries) {
+      if (!highestPoints || entry.points > highestPoints.value) {
+        highestPoints = {
+          grandPrixId: gp.id,
+          playedAt: gp.playedAt,
+          playerId: entry.playerId,
+          playerName: entry.playerName,
+          value: entry.points,
+        }
+      }
+      if (!worstPoints || entry.points < worstPoints.value) {
+        worstPoints = {
+          grandPrixId: gp.id,
+          playedAt: gp.playedAt,
+          playerId: entry.playerId,
+          playerName: entry.playerName,
+          value: entry.points,
+        }
+      }
+      if (!biggestSwing || Math.abs(entry.eloDelta) > Math.abs(biggestSwing.value)) {
+        biggestSwing = {
+          grandPrixId: gp.id,
+          playedAt: gp.playedAt,
+          playerId: entry.playerId,
+          playerName: entry.playerName,
+          value: entry.eloDelta,
+        }
+      }
+
+      const upset = biggestUpsetIn(gp, entry.playerId)
+      if (upset && (!biggestUpset || upset.expected < biggestUpset.expected)) {
+        biggestUpset = {
+          grandPrixId: gp.id,
+          playedAt: gp.playedAt,
+          playerId: entry.playerId,
+          playerName: entry.playerName,
+          opponentName: upset.opponentName,
+          expected: upset.expected,
+        }
+      }
+    }
+  }
+
+  let longestStreak: StreakRecord | null = null
+  for (const p of rosterFromHistory(history)) {
+    const { longest } = streaksFor(history, p.id)
+    if (!longestStreak || longest > longestStreak.length) {
+      longestStreak = { playerId: p.id, playerName: p.name, length: longest }
+    }
+  }
+
+  let biggestNight: NightRecord | null = null
+  for (const [date, count] of nightCounts) {
+    if (!biggestNight || count > biggestNight.count) biggestNight = { date, count }
+  }
+
+  return {
+    highestPoints,
+    worstPoints,
+    biggestSwing,
+    longestStreak,
+    biggestUpset,
+    closestGp,
+    biggestBlowout,
+    biggestNight,
   }
 }
