@@ -636,3 +636,264 @@ export function buildRecordsBook(history: GrandPrix[]): RecordsBook {
     biggestNight,
   }
 }
+
+/** A gap this long since the previous grand prix starts a new session. */
+export const SESSION_GAP_HOURS = 5
+
+export interface SessionStanding {
+  playerId: string
+  playerName: string
+  totalPoints: number
+  /** Sum of this session's eloDelta across every GP the player was in. */
+  netEloDelta: number
+  gpCount: number
+  rank: number
+}
+
+export interface Session {
+  /** The first GP's id in this session — stable enough to link to, since a session is recomputed fresh from history every time. */
+  id: string
+  startedAt: string
+  endedAt: string
+  gps: GrandPrix[]
+  /** Highest total points first. */
+  standings: SessionStanding[]
+}
+
+/**
+ * Groups grand prix into game nights, oldest first: a new session starts
+ * whenever the gap since the previous GP exceeds `gapHours`. Pure grouping
+ * over `played_at` — nothing new is stored, and nothing here touches rating,
+ * since Elo is already exact per-GP regardless of how GPs are grouped for
+ * display.
+ */
+export function sessionsFromHistory(
+  history: GrandPrix[],
+  gapHours: number = SESSION_GAP_HOURS,
+): Session[] {
+  const gapMs = gapHours * 60 * 60 * 1000
+  const groups: GrandPrix[][] = []
+
+  for (const gp of history) {
+    const current = groups[groups.length - 1]
+    const previous = current?.[current.length - 1]
+    const gap = previous
+      ? new Date(gp.playedAt).getTime() - new Date(previous.playedAt).getTime()
+      : Infinity
+
+    if (!current || gap > gapMs) groups.push([gp])
+    else current.push(gp)
+  }
+
+  return groups.map((gps) => {
+    const totals = new Map<
+      string,
+      { name: string; points: number; elo: number; gpCount: number }
+    >()
+
+    for (const gp of gps) {
+      for (const entry of gp.entries) {
+        const row = totals.get(entry.playerId) ?? {
+          name: entry.playerName,
+          points: 0,
+          elo: 0,
+          gpCount: 0,
+        }
+        row.points += entry.points
+        row.elo += entry.eloDelta
+        row.gpCount += 1
+        totals.set(entry.playerId, row)
+      }
+    }
+
+    const standings = [...totals.entries()]
+      .map(([playerId, row]) => ({
+        playerId,
+        playerName: row.name,
+        totalPoints: row.points,
+        netEloDelta: Math.round(row.elo),
+        gpCount: row.gpCount,
+        rank: 0,
+      }))
+      .sort(
+        (a, b) => b.totalPoints - a.totalPoints || a.playerName.localeCompare(b.playerName),
+      )
+
+    let lastPoints: number | null = null
+    let lastRank = 0
+    standings.forEach((standing, index) => {
+      if (standing.totalPoints !== lastPoints) {
+        lastRank = index + 1
+        lastPoints = standing.totalPoints
+      }
+      standing.rank = lastRank
+    })
+
+    return {
+      id: gps[0].id,
+      startedAt: gps[0].playedAt,
+      endedAt: gps[gps.length - 1].playedAt,
+      gps,
+      standings,
+    }
+  })
+}
+
+/**
+ * A time window over the history, for the selector threaded through the
+ * Leaderboard, Analytics and profiles. Deliberately does not window
+ * *rating* — Elo is path-dependent, so "rating over the last 10 GPs" isn't a
+ * filter, it's a recomputation from a reset (see `replayHistory` in
+ * `replay.ts`). Windows here only ever restrict which GPs a points-or-record
+ * stat is computed over; the rating itself stays whatever it actually is.
+ */
+export type StatsWindow =
+  | { kind: 'all' }
+  | { kind: 'lastN'; n: number }
+  | { kind: 'days'; days: number }
+  /** Stands in for "this season" — there's no season concept in the schema, so this is calendar-year-to-date. */
+  | { kind: 'year' }
+
+export const WINDOW_OPTIONS: { label: string; window: StatsWindow }[] = [
+  { label: 'All-time', window: { kind: 'all' } },
+  { label: 'Last 10 GPs', window: { kind: 'lastN', n: 10 } },
+  { label: 'Last 30 days', window: { kind: 'days', days: 30 } },
+  { label: 'This year', window: { kind: 'year' } },
+]
+
+function windowCutoffMs(window: StatsWindow, now: Date): number | null {
+  if (window.kind === 'days') return now.getTime() - window.days * 24 * 60 * 60 * 1000
+  if (window.kind === 'year') return Date.UTC(now.getFullYear(), 0, 1)
+  return null
+}
+
+/** Restricts a whole-roster history to a window — for views that chart or rank everyone at once, like Analytics. */
+export function windowHistory(
+  history: GrandPrix[],
+  window: StatsWindow,
+  now: Date = new Date(),
+): GrandPrix[] {
+  if (window.kind === 'all') return history
+  if (window.kind === 'lastN') return history.slice(-window.n)
+  const cutoff = windowCutoffMs(window, now)!
+  return history.filter((gp) => new Date(gp.playedAt).getTime() >= cutoff)
+}
+
+/**
+ * Restricts one player's own grand prix to a window. "Last 10 GPs" means
+ * *their* last 10, not the field's last 10 — windowing by `windowHistory`
+ * first would leave a player who skipped a few nights with an empty or
+ * near-empty window even though they've raced plenty recently.
+ */
+export function windowGpsFor(
+  history: GrandPrix[],
+  playerId: string,
+  window: StatsWindow,
+  now: Date = new Date(),
+): GrandPrix[] {
+  const gps = gpsFor(history, playerId)
+  if (window.kind === 'all') return gps
+  if (window.kind === 'lastN') return gps.slice(-window.n)
+  const cutoff = windowCutoffMs(window, now)!
+  return gps.filter((gp) => new Date(gp.playedAt).getTime() >= cutoff)
+}
+
+/** Points total that earns the "Clutch" achievement — a near-sweep of every race. */
+export const ACHIEVEMENT_POINTS_THRESHOLD = 55
+/** GP count that earns the "Regular" achievement. */
+export const ACHIEVEMENT_GP_MILESTONE = 10
+
+export interface Achievement {
+  id: string
+  label: string
+  description: string
+  /** When it was first earned, or null if it never has been. */
+  unlockedAt: string | null
+}
+
+/**
+ * Derived milestones for one player's profile. Nothing stored — every
+ * achievement is a scan over `history`, recomputed the same way `playerBests`
+ * is, so retuning a threshold or adding a new one needs no migration.
+ */
+export function achievementsFor(history: GrandPrix[], playerId: string): Achievement[] {
+  const gps = gpsFor(history, playerId)
+
+  let firstWinAt: string | null = null
+  let bigScoreAt: string | null = null
+  let giantSlayerAt: string | null = null
+
+  // Tracks each player's most recent known rating as we walk the history, so
+  // "the highest-rated player" means the whole roster's current #1 at that
+  // point in time, not just whoever else was in this particular GP.
+  const currentElo = new Map<string, number>()
+  for (const gp of history) {
+    let topId: string | null = null
+    let topElo = -Infinity
+    for (const [id, elo] of currentElo) {
+      if (elo > topElo) {
+        topElo = elo
+        topId = id
+      }
+    }
+
+    const me = entryFor(gp, playerId)
+    if (me) {
+      if (!firstWinAt && me.rank === 1) firstWinAt = gp.playedAt
+      if (!bigScoreAt && me.points >= ACHIEVEMENT_POINTS_THRESHOLD) bigScoreAt = gp.playedAt
+      if (!giantSlayerAt && topId && topId !== playerId) {
+        const top = entryFor(gp, topId)
+        if (top && me.points > top.points) giantSlayerAt = gp.playedAt
+      }
+    }
+
+    for (const entry of gp.entries) currentElo.set(entry.playerId, entry.eloAfter)
+  }
+
+  const milestoneAt =
+    gps.length >= ACHIEVEMENT_GP_MILESTONE ? gps[ACHIEVEMENT_GP_MILESTONE - 1].playedAt : null
+
+  let sweepAt: string | null = null
+  for (const session of sessionsFromHistory(history)) {
+    if (session.gps.length < 2) continue
+    const played = session.gps.filter((gp) => entryFor(gp, playerId))
+    if (played.length !== session.gps.length) continue
+    if (played.every((gp) => entryFor(gp, playerId)!.rank === 1)) {
+      sweepAt = session.endedAt
+      break
+    }
+  }
+
+  return [
+    {
+      id: 'first-win',
+      label: 'First win',
+      description: 'Finish first in a grand prix.',
+      unlockedAt: firstWinAt,
+    },
+    {
+      id: 'regular',
+      label: 'Regular',
+      description: `Race in ${ACHIEVEMENT_GP_MILESTONE} grand prix.`,
+      unlockedAt: milestoneAt,
+    },
+    {
+      id: 'giant-slayer',
+      label: 'Giant slayer',
+      description: 'Out-score the single highest-rated racer in the whole roster, in a grand prix they were both in.',
+      unlockedAt: giantSlayerAt,
+    },
+    {
+      id: 'clutch',
+      label: 'Clutch',
+      description: `Score ${ACHIEVEMENT_POINTS_THRESHOLD}+ points in a single grand prix.`,
+      unlockedAt: bigScoreAt,
+    },
+    {
+      id: 'sweep',
+      label: 'Swept the night',
+      description: 'Win every grand prix in a session of at least two.',
+      unlockedAt: sweepAt,
+    },
+  ]
+}

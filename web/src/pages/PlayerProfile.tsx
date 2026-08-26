@@ -12,17 +12,42 @@ import {
 import { formatGpDate, rosterFromHistory, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
 import {
+  achievementsFor,
   consistencyRankings,
   entryFor,
-  gpsFor,
   opponentRecords,
   playerBests,
   pointsConsistency,
   rivalOf,
   streaksFor,
+  windowGpsFor,
+  WINDOW_OPTIONS,
+  type StatsWindow,
 } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 import Ordinal from '../components/Ordinal'
+
+function AchievementChip({
+  label,
+  description,
+  unlockedAt,
+}: {
+  label: string
+  description: string
+  unlockedAt: string | null
+}) {
+  const earned = unlockedAt !== null
+  return (
+    <span
+      className={`rounded border px-2 py-1 text-[11px] font-bold uppercase tracking-wider ${
+        earned ? 'border-gold/40 bg-gold/10 text-gold' : 'border-line bg-pit-hi text-haze/60'
+      }`}
+      title={earned ? `${description} — ${formatGpDate(unlockedAt)}` : description}
+    >
+      {label}
+    </span>
+  )
+}
 
 const AXIS_COLOR = '#948cb4'
 const GRID_COLOR = '#322c4a'
@@ -63,6 +88,7 @@ export default function PlayerProfile() {
   const [history, setHistory] = useState<GrandPrix[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [statsWindow, setStatsWindow] = useState<StatsWindow>(WINDOW_OPTIONS[0].window)
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- fetching from Supabase on mount, the standard data-fetch-in-effect pattern
@@ -92,15 +118,32 @@ export default function PlayerProfile() {
     return null
   }, [history, playerId])
 
-  const gps = useMemo(() => gpsFor(history, playerId), [history, playerId])
+  const achievements = useMemo(() => achievementsFor(history, playerId), [history, playerId])
+
+  const windowedGps = useMemo(
+    () => windowGpsFor(history, playerId, statsWindow),
+    [history, playerId, statsWindow],
+  )
+  const windowedSummary = useMemo(() => {
+    if (windowedGps.length === 0) return null
+    const points = windowedGps.map((gp) => entryFor(gp, playerId)!.points)
+    const eloChange = windowedGps.reduce((sum, gp) => sum + entryFor(gp, playerId)!.eloDelta, 0)
+    return {
+      gpCount: windowedGps.length,
+      totalPoints: points.reduce((sum, p) => sum + p, 0),
+      avgPoints: points.reduce((sum, p) => sum + p, 0) / points.length,
+      eloChange,
+    }
+  }, [windowedGps, playerId])
+
   const chartRows = useMemo(
     () =>
-      gps.map((gp, index) => ({
+      windowedGps.map((gp, index) => ({
         seq: index + 1,
         elo: entryFor(gp, playerId)!.eloAfter,
         playedAt: gp.playedAt,
       })),
-    [gps, playerId],
+    [windowedGps, playerId],
   )
 
   if (error) {
@@ -140,7 +183,7 @@ export default function PlayerProfile() {
     )
   }
 
-  const recentGps = [...gps].reverse().slice(0, 10)
+  const recentGps = [...windowedGps].reverse().slice(0, 10)
 
   return (
     <div className="mx-auto max-w-2xl px-5 py-8">
@@ -207,8 +250,48 @@ export default function PlayerProfile() {
       )}
 
       <h2 className="mt-8 font-display text-lg font-bold uppercase tracking-tight text-chalk">
-        Rating history
+        Achievements
       </h2>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {achievements.map((a) => (
+          <AchievementChip key={a.id} label={a.label} description={a.description} unlockedAt={a.unlockedAt} />
+        ))}
+      </div>
+
+      <div className="mt-8 flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="font-display text-lg font-bold uppercase tracking-tight text-chalk">
+          Rating history
+        </h2>
+        <div className="flex flex-wrap gap-1.5">
+          {WINDOW_OPTIONS.map((opt) => (
+            <button
+              key={opt.label}
+              type="button"
+              onClick={() => setStatsWindow(opt.window)}
+              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                JSON.stringify(opt.window) === JSON.stringify(statsWindow)
+                  ? 'bg-gold text-asphalt'
+                  : 'border border-line text-haze hover:text-chalk'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {windowedSummary && statsWindow.kind !== 'all' && (
+        <p className="mt-2 text-xs text-haze">
+          In this window: {windowedSummary.gpCount} {windowedSummary.gpCount === 1 ? 'GP' : 'GPs'} ·{' '}
+          {windowedSummary.totalPoints} pts total ({windowedSummary.avgPoints.toFixed(1)} avg) ·{' '}
+          <Delta value={windowedSummary.eloChange} /> rating
+        </p>
+      )}
+
+      {!windowedSummary && (
+        <p className="mt-2 text-xs text-haze">No grand prix in this window.</p>
+      )}
+
       <div className="panel mt-3 h-56 w-full p-4 pl-0">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartRows} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>

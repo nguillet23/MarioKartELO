@@ -1,13 +1,103 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import Ordinal from '../components/Ordinal'
 import { formatGpDate, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
-import { buildRecordsBook } from '../lib/stats'
+import { buildRecordsBook, sessionsFromHistory, type Session } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
+
+type View = 'all-time' | 'sessions'
 
 /** "0.20 win probability" reads as "5:1 against" — the group chat's language. */
 function oddsAgainst(expected: number): string {
   return `${((1 - expected) / expected).toFixed(1)}:1`
+}
+
+function Delta({ value }: { value: number }) {
+  const tone = value > 0 ? 'text-boost' : value < 0 ? 'text-spin' : 'text-haze'
+  return (
+    <span className={`font-mono ${tone}`}>
+      {value > 0 ? '+' : ''}
+      {value}
+    </span>
+  )
+}
+
+function sessionDateLabel(session: Session): string {
+  const start = session.startedAt.slice(0, 10)
+  const end = session.endedAt.slice(0, 10)
+  return start === end ? formatGpDate(session.startedAt) : `${formatGpDate(session.startedAt)} – ${formatGpDate(session.endedAt)}`
+}
+
+function SessionCard({ session }: { session: Session }) {
+  const [expanded, setExpanded] = useState(false)
+  const winner = session.standings[0]
+
+  return (
+    <div className="panel overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left"
+        aria-expanded={expanded}
+      >
+        <div className="min-w-0">
+          <p className="font-display text-sm font-bold text-chalk">{sessionDateLabel(session)}</p>
+          <p className="mt-0.5 text-xs text-haze">
+            {session.gps.length} {session.gps.length === 1 ? 'GP' : 'GPs'}
+            {winner && (
+              <>
+                {' · '}
+                <Link
+                  to={`/player/${winner.playerId}`}
+                  className="text-chalk hover:text-gold"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {winner.playerName}
+                </Link>{' '}
+                took the night
+              </>
+            )}
+          </p>
+        </div>
+        <span className="shrink-0 text-haze">{expanded ? '▲' : '▼'}</span>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-line">
+          <ol className="divide-y divide-line">
+            {session.standings.map((s) => (
+              <li key={s.playerId} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                <Ordinal rank={s.rank} className="w-8 shrink-0 text-base" />
+                <Link
+                  to={`/player/${s.playerId}`}
+                  className="min-w-0 flex-1 truncate font-display text-sm font-bold text-chalk hover:text-gold"
+                >
+                  {s.playerName}
+                </Link>
+                <span className="flex shrink-0 items-baseline gap-3 font-mono text-sm">
+                  <span className="text-chalk">{s.totalPoints} pts</span>
+                  <Delta value={s.netEloDelta} />
+                </span>
+              </li>
+            ))}
+          </ol>
+
+          <ol className="divide-y divide-line bg-pit-hi/40">
+            {session.gps.map((gp) => (
+              <li key={gp.id} className="px-4 py-2 text-xs text-haze">
+                {formatGpDate(gp.playedAt)} ·{' '}
+                {[...gp.entries]
+                  .sort((a, b) => a.rank - b.rank)
+                  .map((e) => `${e.playerName} ${e.points}`)
+                  .join(' · ')}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function RecordCard({
@@ -40,6 +130,7 @@ export default function Records() {
   const [history, setHistory] = useState<GrandPrix[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [view, setView] = useState<View>('all-time')
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- fetching from Supabase on mount, the standard data-fetch-in-effect pattern
@@ -53,10 +144,18 @@ export default function Records() {
   }, [])
 
   const book = useMemo(() => buildRecordsBook(history), [history])
+  const sessions = useMemo(() => [...sessionsFromHistory(history)].reverse(), [history])
 
   return (
     <div className="mx-auto max-w-2xl px-5 py-8">
-      <PageHeader title="Records" subtitle="Every all-time superlative, scanned from the history." />
+      <PageHeader
+        title="Records"
+        subtitle={
+          view === 'all-time'
+            ? 'Every all-time superlative, scanned from the history.'
+            : 'Every game night, grouped by a gap in when GPs were played.'
+        }
+      />
 
       {error && (
         <p className="panel border-spin/40 bg-spin/10 p-4 text-sm text-spin">
@@ -74,7 +173,38 @@ export default function Records() {
       )}
 
       {!error && !loading && history.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setView('all-time')}
+            className={`rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${
+              view === 'all-time' ? 'bg-gold text-asphalt' : 'border border-line text-haze hover:text-chalk'
+            }`}
+          >
+            All-time
+          </button>
+          <button
+            type="button"
+            onClick={() => setView('sessions')}
+            className={`rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${
+              view === 'sessions' ? 'bg-gold text-asphalt' : 'border border-line text-haze hover:text-chalk'
+            }`}
+          >
+            Sessions
+          </button>
+        </div>
+      )}
+
+      {!error && !loading && history.length > 0 && view === 'sessions' && (
+        <div className="mt-4 flex flex-col gap-3">
+          {sessions.map((session) => (
+            <SessionCard key={session.id} session={session} />
+          ))}
+        </div>
+      )}
+
+      {!error && !loading && history.length > 0 && view === 'all-time' && (
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
           {book.highestPoints && (
             <RecordCard
               label="Highest single GP"

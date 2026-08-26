@@ -5,6 +5,7 @@ import Analytics from './pages/Analytics'
 import HeadToHead from './pages/HeadToHead'
 import PlayerProfile from './pages/PlayerProfile'
 import Records from './pages/Records'
+import Matchmaking from './pages/Matchmaking'
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   [
@@ -63,6 +64,9 @@ export default function App() {
               <NavLink to="/records" className={navLinkClass}>
                 <NavLabel short="Records" full="Records" />
               </NavLink>
+              <NavLink to="/matchmaking" className={navLinkClass}>
+                <NavLabel short="Match" full="Matchmaking" />
+              </NavLink>
               <NavLink to="/submit" className={navLinkClass}>
                 <NavLabel short="Submit" full="Submit GP" />
               </NavLink>
@@ -76,6 +80,7 @@ export default function App() {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/head-to-head" element={<HeadToHead />} />
             <Route path="/records" element={<Records />} />
+            <Route path="/matchmaking" element={<Matchmaking />} />
             <Route path="/player/:playerId" element={<PlayerProfile />} />
             <Route path="/submit" element={<SubmitGP />} />
             <Route path="*" element={<Navigate to="/" replace />} />

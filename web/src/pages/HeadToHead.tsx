@@ -2,10 +2,96 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { rosterFromHistory, formatGpDate, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
-import { headToHead } from '../lib/stats'
+import { headToHead, opponentRecords } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 
 const UNSELECTED = ''
+type View = 'pairwise' | 'matrix'
+
+/**
+ * Every player against every other in one grid, cells shaded by net Elo
+ * swing — `opponentRecords` already computes one row's whole set of
+ * matchups in a single pass, so building the matrix is just that, once per
+ * row player, rather than calling `headToHead` for every cell.
+ */
+function Matrix({ history, roster }: { history: GrandPrix[]; roster: { id: string; name: string }[] }) {
+  const rows = useMemo(
+    () =>
+      roster.map((row) => {
+        const byOpponent = new Map(
+          opponentRecords(history, row.id).map((r) => [r.opponentId, r]),
+        )
+        return { player: row, cells: roster.map((col) => byOpponent.get(col.id) ?? null) }
+      }),
+    [history, roster],
+  )
+
+  const maxAbsNetElo = useMemo(
+    () =>
+      Math.max(
+        1,
+        ...rows.flatMap((row) => row.cells.map((c) => Math.abs(c?.netElo ?? 0))),
+      ),
+    [rows],
+  )
+
+  function cellStyle(netElo: number | undefined) {
+    if (!netElo) return {}
+    const intensity = Math.min(Math.abs(netElo) / maxAbsNetElo, 1)
+    const color = netElo > 0 ? '53, 208, 127' : '255, 90, 71' // --color-boost / --color-spin
+    return { backgroundColor: `rgba(${color}, ${0.08 + intensity * 0.32})` }
+  }
+
+  return (
+    <div className="panel mt-6 overflow-x-auto">
+      <table className="w-full border-collapse text-center text-xs">
+        <thead>
+          <tr>
+            <th className="sticky left-0 z-10 bg-pit p-2" />
+            {roster.map((col) => (
+              <th
+                key={col.id}
+                className="min-w-16 truncate p-2 font-display text-[11px] font-bold uppercase tracking-tight text-haze"
+                title={col.name}
+              >
+                {col.name}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.player.id} className="border-t border-line">
+              <th
+                className="sticky left-0 z-10 whitespace-nowrap bg-pit p-2 text-left font-display text-[11px] font-bold uppercase tracking-tight text-chalk"
+                scope="row"
+              >
+                {row.player.name}
+              </th>
+              {row.cells.map((cell, i) => {
+                const col = roster[i]
+                if (col.id === row.player.id) {
+                  return <td key={col.id} className="p-2 text-line" aria-hidden="true">—</td>
+                }
+                return (
+                  <td key={col.id} style={cellStyle(cell?.netElo)} className="p-0">
+                    <Link
+                      to={`/head-to-head?view=pairwise&a=${row.player.id}&b=${col.id}`}
+                      className="block px-2 py-2 font-mono text-chalk hover:underline"
+                      title={cell ? `${row.player.name} vs ${col.name}: ${cell.wins}-${cell.losses}${cell.ties ? `-${cell.ties}` : ''}` : `${row.player.name} and ${col.name} haven't raced together`}
+                    >
+                      {cell ? `${cell.netElo > 0 ? '+' : ''}${cell.netElo}` : '·'}
+                    </Link>
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 function Bar({ left, right }: { left: number; right: number }) {
   const total = left + right
@@ -33,10 +119,18 @@ export default function HeadToHead() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Kept in the URL so a matchup can be linked straight into the group chat.
+  // Kept in the URL so a matchup — or the matrix view itself — can be linked straight into the group chat.
   const [searchParams, setSearchParams] = useSearchParams()
   const aId = searchParams.get('a') ?? UNSELECTED
   const bId = searchParams.get('b') ?? UNSELECTED
+  const view: View = searchParams.get('view') === 'matrix' ? 'matrix' : 'pairwise'
+
+  function setView(next: View) {
+    const params = new URLSearchParams(searchParams)
+    if (next === 'pairwise') params.delete('view')
+    else params.set('view', next)
+    setSearchParams(params, { replace: true })
+  }
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- fetching from Supabase on mount, the standard data-fetch-in-effect pattern
@@ -75,7 +169,7 @@ export default function HeadToHead() {
   const samePlayer = bothPicked && aId === bId
 
   return (
-    <div className="mx-auto max-w-2xl px-5 py-8">
+    <div className={`mx-auto px-5 py-8 ${view === 'matrix' ? 'max-w-4xl' : 'max-w-2xl'}`}>
       <PageHeader
         title="Head to head"
         subtitle="Two racers, every grand prix they've both been in."
@@ -100,7 +194,34 @@ export default function HeadToHead() {
 
       {!error && !loading && roster.length >= 2 && (
         <>
-          <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setView('pairwise')}
+              className={`rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${
+                view === 'pairwise' ? 'bg-gold text-asphalt' : 'border border-line text-haze hover:text-chalk'
+              }`}
+            >
+              Pairwise
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('matrix')}
+              className={`rounded-lg px-4 py-2.5 text-sm font-medium transition-colors ${
+                view === 'matrix' ? 'bg-gold text-asphalt' : 'border border-line text-haze hover:text-chalk'
+              }`}
+            >
+              Matrix
+            </button>
+          </div>
+
+          {view === 'matrix' && <Matrix history={history} roster={roster} />}
+        </>
+      )}
+
+      {!error && !loading && roster.length >= 2 && view === 'pairwise' && (
+        <>
+          <div className="mt-6 grid grid-cols-[1fr_auto_1fr] items-end gap-3">
             <label className="block">
               <span className="block text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
                 Racer

@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { loadHistory } from '../lib/loadHistory'
-import { attendance, FORM_WINDOW, playersAtPeak, recentForm, type AttendanceInfo } from '../lib/stats'
-import { formatGpDate } from '../lib/history'
+import { attendance, FORM_WINDOW, playersAtPeak, recentForm } from '../lib/stats'
+import { formatGpDate, type GrandPrix } from '../lib/history'
 import PageHeader from '../components/PageHeader'
 import Ordinal from '../components/Ordinal'
+
+/** Choices for the form window, GPs back — FORM_WINDOW stays the default so existing behavior doesn't shift under anyone. */
+const FORM_WINDOW_OPTIONS = [5, 10, 20]
 
 interface LeaderboardRow {
   id: string
@@ -26,11 +29,38 @@ interface PlayerRaw {
   gp_count: number
 }
 
-function FormChip({ form }: { form: number }) {
+/** Competition ranking: equal ratings share a place, and the next player takes the place their position implies (1, 2, 2, 4). */
+function buildLeaderboardRows(
+  players: PlayerRaw[],
+  history: GrandPrix[],
+  formWindow: number,
+): LeaderboardRow[] {
+  const atPeak = playersAtPeak(history)
+  let lastElo: number | null = null
+  let lastRank = 0
+
+  return players.map((p, index) => {
+    if (p.elo !== lastElo) {
+      lastRank = index + 1
+      lastElo = p.elo
+    }
+    return {
+      id: p.id,
+      name: p.name,
+      elo: p.elo,
+      gpCount: p.gp_count,
+      form: recentForm(history, p.id, formWindow),
+      rank: lastRank,
+      atPeak: atPeak.has(p.id),
+    }
+  })
+}
+
+function FormChip({ form, window }: { form: number; window: number }) {
   const tone = form > 0 ? 'text-boost' : form < 0 ? 'text-spin' : 'text-haze'
   const arrow = form > 0 ? '▲' : form < 0 ? '▼' : ''
   return (
-    <span className={`font-mono text-xs ${tone}`} title={`Elo over the last ${FORM_WINDOW} GPs`}>
+    <span className={`font-mono text-xs ${tone}`} title={`Elo over the last ${window} GPs`}>
       {arrow} {form > 0 ? '+' : ''}
       {form}
     </span>
@@ -38,8 +68,9 @@ function FormChip({ form }: { form: number }) {
 }
 
 export default function Leaderboard() {
-  const [rows, setRows] = useState<LeaderboardRow[]>([])
-  const [attendanceRows, setAttendanceRows] = useState<AttendanceInfo[]>([])
+  const [players, setPlayers] = useState<PlayerRaw[]>([])
+  const [history, setHistory] = useState<GrandPrix[]>([])
+  const [formWindow, setFormWindow] = useState(FORM_WINDOW)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -56,44 +87,26 @@ export default function Leaderboard() {
       return
     }
 
-    let history
+    let nextHistory
     try {
-      history = await loadHistory()
+      nextHistory = await loadHistory()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setLoading(false)
       return
     }
 
-    const atPeak = playersAtPeak(history)
-    setAttendanceRows(attendance(history))
-
-    const players = (playersRes.data ?? []) as PlayerRaw[]
-    let lastElo: number | null = null
-    let lastRank = 0
-
-    setRows(
-      players.map((p, index) => {
-        // Competition ranking: equal ratings share a place, and the next
-        // player takes the place their position implies (1, 2, 2, 4).
-        if (p.elo !== lastElo) {
-          lastRank = index + 1
-          lastElo = p.elo
-        }
-        return {
-          id: p.id,
-          name: p.name,
-          elo: p.elo,
-          gpCount: p.gp_count,
-          form: recentForm(history, p.id),
-          rank: lastRank,
-          atPeak: atPeak.has(p.id),
-        }
-      }),
-    )
+    setPlayers((playersRes.data ?? []) as PlayerRaw[])
+    setHistory(nextHistory)
     setError(null)
     setLoading(false)
   }
+
+  const attendanceRows = useMemo(() => attendance(history), [history])
+  const rows = useMemo(
+    () => buildLeaderboardRows(players, history, formWindow),
+    [players, history, formWindow],
+  )
 
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- fetching from Supabase on mount, the standard data-fetch-in-effect pattern
@@ -140,9 +153,31 @@ export default function Leaderboard() {
 
       {!error && !loading && rows.length > 0 && (
         <>
-          <div className="mb-2 flex items-center justify-between px-4 text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
-            <span>Racer</span>
-            <span>Rating / form</span>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-4">
+            <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
+              Racer
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
+                Form over
+              </span>
+              <div className="flex gap-1">
+                {FORM_WINDOW_OPTIONS.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setFormWindow(n)}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors ${
+                      formWindow === n
+                        ? 'bg-gold text-asphalt'
+                        : 'border border-line text-haze hover:text-chalk'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           <ol className="panel divide-y divide-line overflow-hidden">
@@ -180,7 +215,7 @@ export default function Leaderboard() {
 
                 <div className="text-right">
                   <p className="font-mono text-lg leading-tight text-chalk">{row.elo}</p>
-                  <FormChip form={row.form} />
+                  <FormChip form={row.form} window={formWindow} />
                 </div>
               </li>
             ))}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { computeGpElo, STARTING_ELO } from './elo'
 import { groupIntoGrandPrix, type GrandPrix } from './history'
 import {
+  achievementsFor,
   attendance,
   buildRecap,
   buildRecordsBook,
@@ -13,7 +14,10 @@ import {
   pointsConsistency,
   recentForm,
   rivalOf,
+  sessionsFromHistory,
   streaksFor,
+  windowGpsFor,
+  windowHistory,
 } from './stats'
 
 interface GpSpec {
@@ -56,6 +60,45 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
       elo_delta: updates[i].eloDelta,
       // Ascending, one day apart, so the ordering is unambiguous.
       grand_prix: { played_at: `2026-01-${String(index + 1).padStart(2, '0')}T20:00:00Z` },
+      players: { name: p.playerId.toUpperCase() },
+    }))
+  })
+
+  return groupIntoGrandPrix(rows)
+}
+
+/**
+ * Same replay as `makeHistory`, but each GP takes an explicit `playedAt`
+ * instead of one auto-incrementing day apart — needed for session tests,
+ * where whether two GPs are close enough in time to share a session is
+ * exactly what's under test.
+ */
+function makeHistoryAt(specs: { field: [string, number][]; playedAt: string }[]): GrandPrix[] {
+  const ratings = new Map<string, number>()
+  const gpCounts = new Map<string, number>()
+
+  const rows = specs.flatMap((spec, index) => {
+    const participants = spec.field.map(([playerId, points]) => ({
+      playerId,
+      points,
+      rating: ratings.get(playerId) ?? STARTING_ELO,
+      gpCount: gpCounts.get(playerId) ?? 0,
+    }))
+    const updates = computeGpElo(participants)
+
+    for (const update of updates) {
+      ratings.set(update.playerId, update.eloAfter)
+      gpCounts.set(update.playerId, (gpCounts.get(update.playerId) ?? 0) + 1)
+    }
+
+    return participants.map((p, i) => ({
+      grand_prix_id: `gp-${index + 1}`,
+      player_id: p.playerId,
+      points: p.points,
+      elo_before: updates[i].eloBefore,
+      elo_after: updates[i].eloAfter,
+      elo_delta: updates[i].eloDelta,
+      grand_prix: { played_at: spec.playedAt },
       players: { name: p.playerId.toUpperCase() },
     }))
   })
@@ -560,5 +603,147 @@ describe('buildRecordsBook', () => {
   it('is all null for an empty history', () => {
     const book = buildRecordsBook([])
     expect(Object.values(book).every((v) => v === null)).toBe(true)
+  })
+})
+
+describe('sessionsFromHistory', () => {
+  it('groups grand prix into one session when the gap between them is small', () => {
+    const history = makeHistoryAt([
+      { field: [['a', 40], ['b', 20]], playedAt: '2026-01-01T20:00:00Z' },
+      { field: [['a', 20], ['b', 40]], playedAt: '2026-01-01T21:00:00Z' },
+    ])
+    const sessions = sessionsFromHistory(history)
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0].gps).toHaveLength(2)
+  })
+
+  it('starts a new session once the gap exceeds the threshold', () => {
+    const history = makeHistoryAt([
+      { field: [['a', 40], ['b', 20]], playedAt: '2026-01-01T20:00:00Z' },
+      { field: [['a', 20], ['b', 40]], playedAt: '2026-01-03T20:00:00Z' },
+    ])
+    const sessions = sessionsFromHistory(history)
+    expect(sessions).toHaveLength(2)
+  })
+
+  it('ranks standings by total points across the whole session, not any one GP', () => {
+    const history = makeHistoryAt([
+      { field: [['a', 10], ['b', 50]], playedAt: '2026-01-01T20:00:00Z' },
+      { field: [['a', 50], ['b', 10]], playedAt: '2026-01-01T21:00:00Z' },
+      { field: [['a', 50], ['b', 4]], playedAt: '2026-01-01T22:00:00Z' },
+    ])
+    const [session] = sessionsFromHistory(history)
+    expect(session.standings[0].playerId).toBe('a')
+    expect(session.standings[0].totalPoints).toBe(110)
+    expect(session.standings[0].gpCount).toBe(3)
+  })
+
+  it('is empty for an empty history', () => {
+    expect(sessionsFromHistory([])).toEqual([])
+  })
+})
+
+describe('windowHistory', () => {
+  it('returns everything for an all-time window', () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 20]] },
+      { field: [['a', 20], ['b', 40]] },
+    ])
+    expect(windowHistory(history, { kind: 'all' })).toEqual(history)
+  })
+
+  it('keeps only the last N grand prix for a lastN window', () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 20]] },
+      { field: [['a', 20], ['b', 40]] },
+      { field: [['a', 30], ['b', 30]] },
+    ])
+    expect(windowHistory(history, { kind: 'lastN', n: 2 })).toEqual(history.slice(-2))
+  })
+
+  it('keeps only grand prix within the last N days for a days window', () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 20]] }, // 2026-01-01
+      { field: [['a', 40], ['b', 20]] }, // 2026-01-02
+      { field: [['a', 40], ['b', 20]] }, // 2026-01-03
+    ])
+    const now = new Date('2026-01-03T20:00:00Z')
+    const windowed = windowHistory(history, { kind: 'days', days: 1 }, now)
+    expect(windowed.map((gp) => gp.id)).toEqual(['gp-2', 'gp-3'])
+  })
+})
+
+describe('windowGpsFor', () => {
+  it("restricts to the player's own last N grand prix, not the field's", () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 20]] },
+      { field: [['b', 40], ['c', 20]] }, // a sits this one out
+      { field: [['a', 20], ['b', 40]] },
+    ])
+    const windowed = windowGpsFor(history, 'a', { kind: 'lastN', n: 1 })
+    expect(windowed).toHaveLength(1)
+    expect(windowed[0].id).toBe('gp-3')
+  })
+})
+
+describe('achievementsFor', () => {
+  it('unlocks first win on the first GP a player finishes first in', () => {
+    const history = makeHistory([
+      { field: [['a', 10], ['b', 40]] },
+      { field: [['a', 40], ['b', 10]] },
+    ])
+    const achievements = achievementsFor(history, 'a')
+    expect(achievements.find((a) => a.id === 'first-win')?.unlockedAt).toBe(
+      history[1].playedAt,
+    )
+  })
+
+  it('unlocks clutch the first time a player scores at or above the threshold', () => {
+    const history = makeHistory([{ field: [['a', 55], ['b', 4]] }])
+    expect(achievementsFor(history, 'a').find((a) => a.id === 'clutch')?.unlockedAt).toBe(
+      history[0].playedAt,
+    )
+    expect(achievementsFor(history, 'b').find((a) => a.id === 'clutch')?.unlockedAt).toBeNull()
+  })
+
+  it('unlocks giant slayer only when beating the roster-wide top-rated player', () => {
+    const history = makeHistory([
+      // a builds a big lead over b...
+      { field: [['a', 60], ['b', 4]] },
+      { field: [['a', 60], ['b', 4]] },
+      // ...then c, a first-timer, out-scores a while a is still the roster's top rating.
+      { field: [['a', 4], ['c', 60]] },
+    ])
+    expect(achievementsFor(history, 'c').find((a) => a.id === 'giant-slayer')?.unlockedAt).toBe(
+      history[2].playedAt,
+    )
+    expect(achievementsFor(history, 'a').find((a) => a.id === 'giant-slayer')?.unlockedAt).toBeNull()
+  })
+
+  it('unlocks regular exactly on the GP milestone, not before', () => {
+    const nine = Array.from({ length: 9 }, () => ({ field: [['a', 30], ['b', 30]] as [string, number][] }))
+    expect(achievementsFor(makeHistory(nine), 'a').find((a) => a.id === 'regular')?.unlockedAt).toBeNull()
+
+    const ten = [...nine, { field: [['a', 30], ['b', 30]] as [string, number][] }]
+    const history = makeHistory(ten)
+    expect(achievementsFor(history, 'a').find((a) => a.id === 'regular')?.unlockedAt).toBe(
+      history[9].playedAt,
+    )
+  })
+
+  it('unlocks the sweep achievement when a player wins every GP in a multi-GP session', () => {
+    const history = makeHistoryAt([
+      { field: [['a', 40], ['b', 20]], playedAt: '2026-01-01T20:00:00Z' },
+      { field: [['a', 40], ['b', 20]], playedAt: '2026-01-01T21:00:00Z' },
+    ])
+    expect(achievementsFor(history, 'a').find((a) => a.id === 'sweep')?.unlockedAt).toBe(
+      history[1].playedAt,
+    )
+    expect(achievementsFor(history, 'b').find((a) => a.id === 'sweep')?.unlockedAt).toBeNull()
+  })
+
+  it('never unlocks the sweep achievement off a single-GP session', () => {
+    const history = makeHistory([{ field: [['a', 40], ['b', 20]] }])
+    expect(achievementsFor(history, 'a').find((a) => a.id === 'sweep')?.unlockedAt).toBeNull()
   })
 })

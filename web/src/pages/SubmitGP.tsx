@@ -2,11 +2,15 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import {
   computeGpElo,
+  DEFAULT_K,
+  MARGIN_WEIGHT,
   MAX_GP_POINTS,
   MIN_GP_POINTS,
   type GpParticipant,
 } from '../lib/elo'
+import { formatGpDate, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
+import { replayHistory, type ReplayResult } from '../lib/replay'
 import { buildRecap, type Recap } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 import RecapCard from '../components/RecapCard'
@@ -66,6 +70,13 @@ export default function SubmitGP() {
   const [voidError, setVoidError] = useState<string | null>(null)
   const [voidSuccess, setVoidSuccess] = useState(false)
 
+  const [fullHistory, setFullHistory] = useState<GrandPrix[]>([])
+  const [replayOpen, setReplayOpen] = useState(false)
+  const [replayK, setReplayK] = useState(String(DEFAULT_K))
+  const [replayMarginWeight, setReplayMarginWeight] = useState(String(MARGIN_WEIGHT))
+  const [excludedGpIds, setExcludedGpIds] = useState<Set<string>>(new Set())
+  const [replayResult, setReplayResult] = useState<ReplayResult | null>(null)
+
   async function loadRoster() {
     const { data, error: fetchError } = await supabase
       .from('players')
@@ -111,7 +122,34 @@ export default function SubmitGP() {
     // oxlint-disable-next-line react/set-state-in-effect -- fetching from Supabase on mount, the standard data-fetch-in-effect pattern
     loadRoster()
     loadLastGp()
+    // The replay tool is read-only and rarely opened, but needs the whole
+    // history to build its GP checklist — loaded once up front rather than
+    // only when the section is expanded, so opening it is instant.
+    loadHistory()
+      .then(setFullHistory)
+      .catch(() => setFullHistory([]))
   }, [])
+
+  function toggleExcludedGp(gpId: string) {
+    setExcludedGpIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(gpId)) next.delete(gpId)
+      else next.add(gpId)
+      return next
+    })
+  }
+
+  function runReplay() {
+    const filtered = fullHistory.filter((gp) => !excludedGpIds.has(gp.id))
+    const k = Number(replayK)
+    const marginWeight = Number(replayMarginWeight)
+    setReplayResult(
+      replayHistory(filtered, {
+        ...(Number.isFinite(k) && k > 0 ? { k } : {}),
+        ...(Number.isFinite(marginWeight) ? { marginWeight } : {}),
+      }),
+    )
+  }
 
   const usedPlayerIds = useMemo(
     () => new Set(entries.map((e) => e.playerId).filter((id) => id !== UNSELECTED)),
@@ -499,6 +537,125 @@ export default function SubmitGP() {
               </button>
             )}
           </>
+        )}
+      </section>
+
+      <section className="mt-12">
+        <h2 className="font-display text-lg font-bold uppercase tracking-tight text-chalk">
+          Replay ratings
+        </h2>
+        <p className="mt-1 text-sm text-haze">
+          A what-if tool: rebuild every rating from scratch with different constants, or with some
+          grand prix left out. Read-only — nothing here is saved, and it never touches the real
+          ratings.
+        </p>
+
+        {!replayOpen ? (
+          <button
+            type="button"
+            onClick={() => setReplayOpen(true)}
+            className="mt-3 rounded-lg border border-line px-4 py-2.5 text-sm font-medium text-haze transition-colors hover:border-gold hover:text-gold"
+          >
+            Open the replay tool
+          </button>
+        ) : (
+          <div className="mt-4 flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="block text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
+                  K factor
+                </span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={replayK}
+                  onChange={(e) => setReplayK(e.target.value)}
+                  className="field mt-2"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
+                  Margin weight
+                </span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.05"
+                  min={0}
+                  max={1}
+                  value={replayMarginWeight}
+                  onChange={(e) => setReplayMarginWeight(e.target.value)}
+                  className="field mt-2"
+                />
+              </label>
+            </div>
+
+            {fullHistory.length > 0 && (
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
+                  Exclude grand prix (stands in for voiding them)
+                </p>
+                <ol className="panel mt-2 max-h-56 divide-y divide-line overflow-y-auto">
+                  {[...fullHistory].reverse().map((gp) => (
+                    <li key={gp.id}>
+                      <label className="flex cursor-pointer items-center gap-3 px-4 py-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={excludedGpIds.has(gp.id)}
+                          onChange={() => toggleExcludedGp(gp.id)}
+                        />
+                        <span className="text-haze">{formatGpDate(gp.playedAt)}</span>
+                        <span className="min-w-0 flex-1 truncate text-chalk">
+                          {gp.entries[0].playerName} won with {gp.entries[0].points}
+                        </span>
+                      </label>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={runReplay}
+              disabled={fullHistory.length === 0}
+              className="self-start rounded-lg bg-gold px-4 py-2.5 text-sm font-bold text-asphalt disabled:opacity-40"
+            >
+              Run replay
+            </button>
+
+            {replayResult && (
+              <ol className="panel divide-y divide-line">
+                {roster
+                  .map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                    actual: p.elo,
+                    replayed: replayResult.finalRatings.get(p.id) ?? null,
+                  }))
+                  .filter((r) => r.replayed !== null)
+                  .sort((a, b) => (b.replayed ?? 0) - (a.replayed ?? 0))
+                  .map((r) => {
+                    const diff = r.replayed! - r.actual
+                    return (
+                      <li key={r.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                        <span className="min-w-0 truncate font-display text-sm font-bold text-chalk">
+                          {r.name}
+                        </span>
+                        <span className="flex shrink-0 items-baseline gap-3 font-mono text-sm">
+                          <span className="text-haze">{r.actual} →</span>
+                          <span className="text-chalk">{r.replayed}</span>
+                          <span className={diff > 0 ? 'text-boost' : diff < 0 ? 'text-spin' : 'text-haze'}>
+                            ({diff > 0 ? '+' : ''}
+                            {diff})
+                          </span>
+                        </span>
+                      </li>
+                    )
+                  })}
+              </ol>
+            )}
+          </div>
         )}
       </section>
     </div>
