@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
-import { loadHistory } from '../lib/history'
+import { loadHistory } from '../lib/loadHistory'
 import { playersAtPeak } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 import Ordinal from '../components/Ordinal'

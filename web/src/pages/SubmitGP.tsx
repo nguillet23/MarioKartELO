@@ -6,7 +6,7 @@ import {
   MIN_GP_POINTS,
   type GpParticipant,
 } from '../lib/elo'
-import { loadHistory } from '../lib/history'
+import { loadHistory } from '../lib/loadHistory'
 import { buildRecap, type Recap } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 import RecapCard from '../components/RecapCard'
