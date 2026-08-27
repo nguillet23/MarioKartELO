@@ -13,14 +13,20 @@ function suffixFor(rank: number): string {
   }
 }
 
+const TIER_CLASS: Record<number, string> = {
+  1: 'text-gold',
+  2: 'text-silver',
+  3: 'text-bronze',
+}
+
 /**
- * A race-position marker, the way Mario Kart shows it on screen. The leader
- * is gold; everyone else is chalk.
+ * A race-position marker, the way Mario Kart shows it on screen. The podium
+ * — 1st, 2nd, 3rd — gets its own medal color; everyone else is chalk.
  */
 export default function Ordinal({ rank, className = '' }: { rank: number; className?: string }) {
   return (
     <span
-      className={`ordinal ${rank === 1 ? 'text-gold' : 'text-chalk'} ${className}`}
+      className={`ordinal ${TIER_CLASS[rank] ?? 'text-chalk'} ${className}`}
       aria-label={`${rank}${suffixFor(rank)} place`}
     >
       {rank}

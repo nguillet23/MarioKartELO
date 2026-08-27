@@ -1,6 +1,9 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type ReactElement } from 'react'
 import { Link } from 'react-router-dom'
 import Ordinal from './Ordinal'
+import RacerBadge from './RacerBadge'
+import { ArrowDownIcon, ArrowUpIcon, SparkleIcon } from './BadgeIcons'
+import { StarIcon, VersusIcon } from './NavIcons'
 import { drawResultCard, shareResultCard } from '../lib/resultCard'
 import { formatGpDate } from '../lib/history'
 import type { Recap, RecapEntry } from '../lib/stats'
@@ -21,7 +24,17 @@ function Delta({ value }: { value: number }) {
   )
 }
 
-function Badge({ label, tone }: { label: string; tone: 'gold' | 'boost' | 'spin' | 'haze' }) {
+type BadgeIcon = (props: { className?: string }) => ReactElement
+
+function Badge({
+  label,
+  tone,
+  icon: Icon,
+}: {
+  label: string
+  tone: 'gold' | 'boost' | 'spin' | 'haze'
+  icon: BadgeIcon
+}) {
   const tones = {
     gold: 'border-gold/40 bg-gold/10 text-gold',
     boost: 'border-boost/40 bg-boost/10 text-boost',
@@ -30,8 +43,9 @@ function Badge({ label, tone }: { label: string; tone: 'gold' | 'boost' | 'spin'
   }
   return (
     <span
-      className={`rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${tones[tone]}`}
+      className={`flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${tones[tone]}`}
     >
+      <Icon className="h-2.5 w-2.5 shrink-0" />
       {label}
     </span>
   )
@@ -44,13 +58,14 @@ function oddsAgainst(expected: number): string {
 
 function badgesFor(entry: RecapEntry) {
   // A debut is every kind of record at once, so it stands in for all of them.
-  if (entry.debut) return [{ label: 'Debut', tone: 'haze' as const }]
+  if (entry.debut) return [{ label: 'Debut', tone: 'haze' as const, icon: SparkleIcon }]
 
-  const badges: { label: string; tone: 'gold' | 'boost' | 'spin' }[] = []
-  if (entry.peakElo) badges.push({ label: 'Peak Elo', tone: 'gold' })
-  if (entry.bestPoints) badges.push({ label: 'Best GP', tone: 'boost' })
-  if (entry.worstPoints) badges.push({ label: 'Worst GP', tone: 'spin' })
-  if (entry.upset) badges.push({ label: `Upset (${oddsAgainst(entry.upset.expected)})`, tone: 'gold' })
+  const badges: { label: string; tone: 'gold' | 'boost' | 'spin'; icon: BadgeIcon }[] = []
+  if (entry.peakElo) badges.push({ label: 'Peak Elo', tone: 'gold', icon: StarIcon })
+  if (entry.bestPoints) badges.push({ label: 'Best GP', tone: 'boost', icon: ArrowUpIcon })
+  if (entry.worstPoints) badges.push({ label: 'Worst GP', tone: 'spin', icon: ArrowDownIcon })
+  if (entry.upset)
+    badges.push({ label: `Upset (${oddsAgainst(entry.upset.expected)})`, tone: 'gold', icon: VersusIcon })
   return badges
 }
 
@@ -97,7 +112,13 @@ export default function RecapCard({ recap }: { recap: Recap }) {
           <li
             key={entry.playerId}
             className={`grid grid-cols-[2.25rem_1fr_auto] items-center gap-3 px-4 py-3 ${
-              entry.rank === 1 ? 'bg-gold/5' : ''
+              entry.rank === 1
+                ? 'itembox-shine bg-gold/5'
+                : entry.rank === 2
+                  ? 'bg-silver/5'
+                  : entry.rank === 3
+                    ? 'bg-bronze/5'
+                    : ''
             }`}
           >
             <Ordinal rank={entry.rank} className="text-xl" />
@@ -105,13 +126,14 @@ export default function RecapCard({ recap }: { recap: Recap }) {
             <div className="min-w-0">
               <Link
                 to={`/player/${entry.playerId}`}
-                className="block truncate font-display text-sm font-bold text-chalk hover:text-gold"
+                className="flex items-center gap-2 truncate font-display text-sm font-bold text-chalk hover:text-gold"
               >
-                {entry.playerName}
+                <RacerBadge id={entry.playerId} name={entry.playerName} />
+                <span className="truncate">{entry.playerName}</span>
               </Link>
               <div className="mt-1 flex flex-wrap gap-1">
                 {badgesFor(entry).map((badge) => (
-                  <Badge key={badge.label} label={badge.label} tone={badge.tone} />
+                  <Badge key={badge.label} label={badge.label} tone={badge.tone} icon={badge.icon} />
                 ))}
               </div>
             </div>

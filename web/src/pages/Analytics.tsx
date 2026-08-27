@@ -12,25 +12,9 @@ import {
 import { supabase } from '../lib/supabaseClient'
 import { loadHistory } from '../lib/loadHistory'
 import { windowHistory, WINDOW_OPTIONS, type StatsWindow } from '../lib/stats'
+import { RACER_COLORS } from '../lib/palette'
 import type { GrandPrix } from '../lib/history'
 import PageHeader from '../components/PageHeader'
-
-// Mirrors the palette in index.css — Recharts sets `stroke` as an SVG
-// presentation attribute, which doesn't resolve CSS custom properties.
-const LINE_COLORS = [
-  '#e8402a',
-  '#3a86f0',
-  '#ffc42b',
-  '#35c15f',
-  '#c084fc',
-  '#22d3ee',
-  '#fb7185',
-  '#a3e635',
-  '#818cf8',
-  '#fb923c',
-  '#2dd4bf',
-  '#f472b6',
-]
 
 const AXIS_COLOR = '#948cb4'
 const GRID_COLOR = '#322c4a'
@@ -324,7 +308,7 @@ export default function Analytics() {
                     type="monotone"
                     dataKey={player.id}
                     name={player.name}
-                    stroke={LINE_COLORS[index % LINE_COLORS.length]}
+                    stroke={RACER_COLORS[index % RACER_COLORS.length]}
                     strokeWidth={2}
                     connectNulls
                     dot={false}

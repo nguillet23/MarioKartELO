@@ -1,29 +1,46 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
+import type { ReactNode } from 'react'
 import SubmitGP from './pages/SubmitGP'
 import Leaderboard from './pages/Leaderboard'
 import Analytics from './pages/Analytics'
 import HeadToHead from './pages/HeadToHead'
 import PlayerProfile from './pages/PlayerProfile'
 import Records from './pages/Records'
-import Matchmaking from './pages/Matchmaking'
+import { FlagIcon, PodiumIcon, StarIcon, TrendIcon, VersusIcon } from './components/NavIcons'
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   [
-    'flex-1 rounded-lg px-2 py-3 text-center text-sm font-medium transition-colors',
+    'flex-1 rounded-lg px-1.5 py-2 text-center text-sm font-medium transition-colors',
     'sm:flex-none sm:px-4 sm:py-2',
     isActive ? 'bg-pit-hi text-gold' : 'text-haze hover:text-chalk',
   ].join(' ')
 
 /**
- * Four tabs don't fit across a phone at full length, so each one carries a
- * short form for the bottom bar and its full name from sm up.
+ * Six tabs don't fit across a phone as full-length text (they used to be
+ * four), so each one leads with an icon and carries a short label under it
+ * for the bottom bar, collapsing to icon-plus-full-name inline from sm up.
  */
-function NavLabel({ short, full }: { short: string; full: string }) {
+function NavItem({
+  to,
+  end,
+  icon,
+  short,
+  full,
+}: {
+  to: string
+  end?: boolean
+  icon: ReactNode
+  short: string
+  full: string
+}) {
   return (
-    <>
-      <span className="sm:hidden">{short}</span>
-      <span className="hidden sm:inline">{full}</span>
-    </>
+    <NavLink to={to} end={end} className={navLinkClass}>
+      <span className="flex flex-col items-center gap-1 sm:flex-row sm:gap-2">
+        <span className="h-[18px] w-[18px] shrink-0 sm:h-4 sm:w-4">{icon}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wide sm:hidden">{short}</span>
+        <span className="hidden sm:inline">{full}</span>
+      </span>
+    </NavLink>
   )
 }
 
@@ -52,24 +69,21 @@ export default function App() {
                 'sm:static sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none',
               ].join(' ')}
             >
-              <NavLink to="/" end className={navLinkClass}>
-                <NavLabel short="Table" full="Leaderboard" />
-              </NavLink>
-              <NavLink to="/analytics" className={navLinkClass}>
-                <NavLabel short="Form" full="Analytics" />
-              </NavLink>
-              <NavLink to="/head-to-head" className={navLinkClass}>
-                <NavLabel short="H2H" full="Head to Head" />
-              </NavLink>
-              <NavLink to="/records" className={navLinkClass}>
-                <NavLabel short="Records" full="Records" />
-              </NavLink>
-              <NavLink to="/matchmaking" className={navLinkClass}>
-                <NavLabel short="Match" full="Matchmaking" />
-              </NavLink>
-              <NavLink to="/submit" className={navLinkClass}>
-                <NavLabel short="Submit" full="Submit GP" />
-              </NavLink>
+              <NavItem to="/" end icon={<PodiumIcon className="h-full w-full" />} short="Table" full="Leaderboard" />
+              <NavItem
+                to="/analytics"
+                icon={<TrendIcon className="h-full w-full" />}
+                short="Form"
+                full="Analytics"
+              />
+              <NavItem
+                to="/head-to-head"
+                icon={<VersusIcon className="h-full w-full" />}
+                short="H2H"
+                full="Head to Head"
+              />
+              <NavItem to="/records" icon={<StarIcon className="h-full w-full" />} short="Records" full="Records" />
+              <NavItem to="/submit" icon={<FlagIcon className="h-full w-full" />} short="Submit" full="Submit GP" />
             </nav>
           </div>
         </header>
@@ -80,7 +94,6 @@ export default function App() {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/head-to-head" element={<HeadToHead />} />
             <Route path="/records" element={<Records />} />
-            <Route path="/matchmaking" element={<Matchmaking />} />
             <Route path="/player/:playerId" element={<PlayerProfile />} />
             <Route path="/submit" element={<SubmitGP />} />
             <Route path="*" element={<Navigate to="/" replace />} />

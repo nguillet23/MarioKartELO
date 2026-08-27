@@ -6,6 +6,7 @@ import { attendance, FORM_WINDOW, playersAtPeak, recentForm } from '../lib/stats
 import { formatGpDate, type GrandPrix } from '../lib/history'
 import PageHeader from '../components/PageHeader'
 import Ordinal from '../components/Ordinal'
+import RacerBadge from '../components/RacerBadge'
 
 /** Choices for the form window, GPs back — FORM_WINDOW stays the default so existing behavior doesn't shift under anyone. */
 const FORM_WINDOW_OPTIONS = [5, 10, 20]
@@ -185,32 +186,41 @@ export default function Leaderboard() {
               <li
                 key={row.id}
                 className={`row-in grid grid-cols-[2.75rem_1fr_auto] items-center gap-3 px-4 py-3.5 ${
-                  row.rank === 1 ? 'bg-gold/5' : ''
+                  row.rank === 1
+                    ? 'itembox-shine bg-gold/5'
+                    : row.rank === 2
+                      ? 'bg-silver/5'
+                      : row.rank === 3
+                        ? 'bg-bronze/5'
+                        : ''
                 }`}
                 style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
               >
                 <Ordinal rank={row.rank} className="text-2xl" />
 
-                <div className="min-w-0">
-                  <Link
-                    to={`/player/${row.id}`}
-                    className="block truncate font-display text-base font-bold text-chalk transition-colors hover:text-gold"
-                  >
-                    {row.name}
-                  </Link>
-                  <p className="flex items-center gap-2 text-xs text-haze">
-                    <span>
-                      {row.gpCount} {row.gpCount === 1 ? 'GP' : 'GPs'}
-                    </span>
-                    {row.atPeak && (
-                      <span
-                        className="rounded border border-gold/40 bg-gold/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gold"
-                        title="At their highest rating ever"
-                      >
-                        Peak
+                <div className="flex min-w-0 items-center gap-3">
+                  <RacerBadge id={row.id} name={row.name} />
+                  <div className="min-w-0">
+                    <Link
+                      to={`/player/${row.id}`}
+                      className="block truncate font-display text-base font-bold text-chalk transition-colors hover:text-gold"
+                    >
+                      {row.name}
+                    </Link>
+                    <p className="flex items-center gap-2 text-xs text-haze">
+                      <span>
+                        {row.gpCount} {row.gpCount === 1 ? 'GP' : 'GPs'}
                       </span>
-                    )}
-                  </p>
+                      {row.atPeak && (
+                        <span
+                          className="rounded border border-gold/40 bg-gold/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gold"
+                          title="At their highest rating ever"
+                        >
+                          Peak
+                        </span>
+                      )}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="text-right">
@@ -234,12 +244,15 @@ export default function Leaderboard() {
                     key={row.playerId}
                     className="flex items-center justify-between gap-3 px-4 py-3"
                   >
-                    <Link
-                      to={`/player/${row.playerId}`}
-                      className="min-w-0 truncate font-display text-sm font-bold text-chalk hover:text-gold"
-                    >
-                      {row.playerName}
-                    </Link>
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <RacerBadge id={row.playerId} name={row.playerName} />
+                      <Link
+                        to={`/player/${row.playerId}`}
+                        className="min-w-0 truncate font-display text-sm font-bold text-chalk hover:text-gold"
+                      >
+                        {row.playerName}
+                      </Link>
+                    </span>
                     <span className="flex shrink-0 items-center gap-3 text-xs">
                       {row.drifted && (
                         <span className="rounded border border-line bg-pit-hi px-1.5 py-0.5 font-bold uppercase tracking-wider text-haze">

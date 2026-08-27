@@ -14,14 +14,12 @@ import { replayHistory, type ReplayResult } from '../lib/replay'
 import { buildRecap, type Recap } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 import RecapCard from '../components/RecapCard'
+import RacerBadge from '../components/RacerBadge'
 
 const MIN_PLAYERS = 2
 const MAX_PLAYERS = 12
 const DEFAULT_PLAYERS = 4
 const UNSELECTED = ''
-
-/** Player-marker colors, cycled down the grid the way Mario Kart numbers players. */
-const CHANNEL_COLORS = ['bg-p1', 'bg-p2', 'bg-p3', 'bg-p4']
 
 interface PlayerRow {
   id: string
@@ -357,14 +355,22 @@ export default function SubmitGP() {
             return (
               <li
                 key={entry.key}
-                className="panel flex items-center gap-3 overflow-hidden p-3 pl-0"
+                className="panel flex items-center gap-3 p-3"
               >
-                <span
-                  className={`h-11 w-1.5 shrink-0 rounded-r ${
-                    CHANNEL_COLORS[index % CHANNEL_COLORS.length]
-                  }`}
-                  aria-hidden="true"
-                />
+                {entry.playerId === UNSELECTED ? (
+                  <span
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-dashed border-line text-sm text-haze"
+                    aria-hidden="true"
+                  >
+                    {index + 1}
+                  </span>
+                ) : (
+                  <RacerBadge
+                    id={entry.playerId}
+                    name={roster.find((p) => p.id === entry.playerId)?.name ?? '?'}
+                    size="md"
+                  />
+                )}
 
                 <select
                   className="field flex-1"

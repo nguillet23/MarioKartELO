@@ -6,6 +6,7 @@
 
 import type { Recap } from './stats'
 import { formatGpDate } from './history'
+import { colorForRacer } from './palette'
 
 const WIDTH = 1080
 const HEIGHT = 1350
@@ -20,6 +21,16 @@ const HAZE = '#948cb4'
 const GOLD = '#ffc42b'
 const BOOST = '#35d07f'
 const SPIN = '#ff5a47'
+const SILVER = '#b9c3d4'
+const BRONZE = '#c17a4d'
+
+/** The podium's medal color for a rank, or null off the podium. */
+function tierColor(rank: number): string | null {
+  if (rank === 1) return GOLD
+  if (rank === 2) return SILVER
+  if (rank === 3) return BRONZE
+  return null
+}
 
 const DISPLAY = 'Archivo, ui-sans-serif, system-ui, sans-serif'
 const SANS = '"Space Grotesk", ui-sans-serif, system-ui, sans-serif'
@@ -66,7 +77,7 @@ function drawOrdinal(
   size: number,
 ): void {
   ctx.save()
-  ctx.fillStyle = rank === 1 ? GOLD : CHALK
+  ctx.fillStyle = tierColor(rank) ?? CHALK
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
 
@@ -147,6 +158,32 @@ function drawBadge(
   return width
 }
 
+/** A racer's color-coded initial, matching the in-app RacerBadge. */
+function drawDriverBadge(
+  ctx: CanvasRenderingContext2D,
+  playerId: string,
+  playerName: string,
+  x: number,
+  y: number,
+  size: number,
+): void {
+  const color = colorForRacer(playerId)
+  ctx.save()
+  ctx.fillStyle = `${color}22`
+  roundedRect(ctx, x, y - size / 2, size, size, size * 0.22)
+  ctx.fill()
+  ctx.strokeStyle = `${color}66`
+  ctx.lineWidth = 2
+  ctx.stroke()
+
+  ctx.fillStyle = color
+  ctx.font = `900 italic ${size * 0.5}px ${DISPLAY}`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(playerName.trim().charAt(0).toUpperCase() || '?', x + size / 2, y + size * 0.04)
+  ctx.restore()
+}
+
 /**
  * Paints the recap onto `canvas`, sizing it to 1080×1350 (a 4:5 portrait,
  * which is what messaging apps show without cropping).
@@ -210,21 +247,26 @@ export async function drawResultCard(canvas: HTMLCanvasElement, recap: Recap): P
     const top = listTop + index * (rowHeight + rowGap)
     const middle = top + rowHeight / 2
 
-    ctx.fillStyle = entry.rank === 1 ? 'rgba(255, 196, 43, 0.08)' : PIT
+    const tier = tierColor(entry.rank)
+    ctx.fillStyle = tier ? `${tier}14` : PIT
     roundedRect(ctx, margin, top, WIDTH - margin * 2, rowHeight, 18)
     ctx.fill()
-    ctx.strokeStyle = entry.rank === 1 ? 'rgba(255, 196, 43, 0.45)' : LINE
+    ctx.strokeStyle = tier ? `${tier}73` : LINE
     ctx.lineWidth = 2
     ctx.stroke()
 
     drawOrdinal(ctx, entry.rank, margin + 28, middle + 18 * fontScale, 52 * fontScale)
 
+    const badgeSize = 60 * fontScale
+    const badgeX = margin + 145
+    drawDriverBadge(ctx, entry.playerId, entry.playerName, badgeX, middle, badgeSize)
+
     ctx.font = `700 ${34 * fontScale}px ${SANS}`
     ctx.fillStyle = CHALK
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
-    const nameX = margin + 150
-    const nameMaxWidth = WIDTH - margin * 2 - 150 - 260
+    const nameX = badgeX + badgeSize + 18
+    const nameMaxWidth = WIDTH - margin - 260 - nameX
     const name = fitText(ctx, entry.playerName, nameMaxWidth)
     ctx.fillText(name, nameX, middle)
 

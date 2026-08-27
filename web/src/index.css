@@ -18,11 +18,28 @@
   --color-boost: #35d07f;
   --color-spin: #ff5a47;
 
-  /* Player-marker colors, in Mario Kart's own HUD order. */
+  /* Podium tiers below the leader — a cool platinum for 2nd, a warm copper
+     for 3rd, so all three medal spots read at a glance the way the game's
+     own podium ceremony does. */
+  --color-silver: #b9c3d4;
+  --color-bronze: #c17a4d;
+
+  /* Player-marker colors, in Mario Kart's own HUD order, extended to a full
+     12-racer set — one distinct color per driver, the way a select screen
+     has one badge color per character. Mirrored as hex in lib/palette.ts for
+     the places (charts, canvas) that can't resolve a CSS custom property. */
   --color-p1: #e8402a;
   --color-p2: #3a86f0;
   --color-p3: #ffc42b;
   --color-p4: #35c15f;
+  --color-p5: #c084fc;
+  --color-p6: #22d3ee;
+  --color-p7: #fb7185;
+  --color-p8: #a3e635;
+  --color-p9: #818cf8;
+  --color-p10: #fb923c;
+  --color-p11: #2dd4bf;
+  --color-p12: #f472b6;
 
   --font-display: "Archivo", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
@@ -121,6 +138,40 @@
 
   .row-in {
     animation: row-in 0.32s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  }
+
+  /* The one flashy moment on the site: a glint sweeping across first place,
+     like the shine on an item box waiting to be opened. Used sparingly —
+     only where "currently in first" is the whole point of the row. */
+  @keyframes itembox-shine {
+    from {
+      background-position: -150% 0;
+    }
+    to {
+      background-position: 250% 0;
+    }
+  }
+
+  .itembox-shine {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .itembox-shine::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      100deg,
+      transparent 30%,
+      rgb(255 196 43 / 0.16) 45%,
+      rgb(255 255 255 / 0.3) 50%,
+      rgb(255 196 43 / 0.16) 55%,
+      transparent 70%
+    );
+    background-size: 250% 100%;
+    animation: itembox-shine 3.4s ease-in-out infinite;
+    pointer-events: none;
   }
 }
 
