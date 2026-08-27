@@ -5,6 +5,7 @@ import { formatGpDate, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
 import { buildRecordsBook, sessionsFromHistory, type Session } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
+import RacerBadge from '../components/RacerBadge'
 
 type View = 'all-time' | 'sessions'
 
@@ -71,9 +72,10 @@ function SessionCard({ session }: { session: Session }) {
                 <Ordinal rank={s.rank} className="w-8 shrink-0 text-base" />
                 <Link
                   to={`/player/${s.playerId}`}
-                  className="min-w-0 flex-1 truncate font-display text-sm font-bold text-chalk hover:text-gold"
+                  className="flex min-w-0 flex-1 items-center gap-2 truncate font-display text-sm font-bold text-chalk hover:text-gold"
                 >
-                  {s.playerName}
+                  <RacerBadge id={s.playerId} name={s.playerName} />
+                  <span className="truncate">{s.playerName}</span>
                 </Link>
                 <span className="flex shrink-0 items-baseline gap-3 font-mono text-sm">
                   <span className="text-chalk">{s.totalPoints} pts</span>

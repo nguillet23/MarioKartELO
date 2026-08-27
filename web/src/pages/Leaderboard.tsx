@@ -186,7 +186,13 @@ export default function Leaderboard() {
               <li
                 key={row.id}
                 className={`row-in grid grid-cols-[2.75rem_1fr_auto] items-center gap-3 px-4 py-3.5 ${
-                  row.rank === 1 ? 'itembox-shine bg-gold/5' : ''
+                  row.rank === 1
+                    ? 'itembox-shine bg-gold/5'
+                    : row.rank === 2
+                      ? 'bg-silver/5'
+                      : row.rank === 3
+                        ? 'bg-bronze/5'
+                        : ''
                 }`}
                 style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
               >

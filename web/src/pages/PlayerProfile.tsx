@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   CartesianGrid,
@@ -26,24 +26,40 @@ import {
 } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
 import Ordinal from '../components/Ordinal'
+import RacerBadge from '../components/RacerBadge'
+import { ArrowUpIcon, RepeatIcon, SparkleIcon } from '../components/BadgeIcons'
+import { StarIcon, TrendIcon, VersusIcon } from '../components/NavIcons'
+
+/** One icon per achievement id — see `achievementsFor` in lib/stats.ts for what each one means. */
+const ACHIEVEMENT_ICONS: Record<string, (props: { className?: string }) => ReactElement> = {
+  'first-win': SparkleIcon,
+  regular: RepeatIcon,
+  'giant-slayer': VersusIcon,
+  clutch: ArrowUpIcon,
+  sweep: StarIcon,
+}
 
 function AchievementChip({
+  id,
   label,
   description,
   unlockedAt,
 }: {
+  id: string
   label: string
   description: string
   unlockedAt: string | null
 }) {
   const earned = unlockedAt !== null
+  const Icon = ACHIEVEMENT_ICONS[id] ?? TrendIcon
   return (
     <span
-      className={`rounded border px-2 py-1 text-[11px] font-bold uppercase tracking-wider ${
+      className={`flex items-center gap-1.5 rounded border px-2 py-1 text-[11px] font-bold uppercase tracking-wider ${
         earned ? 'border-gold/40 bg-gold/10 text-gold' : 'border-line bg-pit-hi text-haze/60'
       }`}
       title={earned ? `${description} — ${formatGpDate(unlockedAt)}` : description}
     >
+      <Icon className="h-3 w-3 shrink-0" />
       {label}
     </span>
   )
@@ -227,8 +243,9 @@ export default function PlayerProfile() {
           <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2">
             <Link
               to={`/player/${rival.opponentId}`}
-              className="font-display text-xl font-bold text-chalk hover:text-gold"
+              className="flex items-center gap-2 font-display text-xl font-bold text-chalk hover:text-gold"
             >
+              <RacerBadge id={rival.opponentId} name={rival.opponentName} />
               {rival.opponentName}
             </Link>
             <span className="font-mono text-sm text-chalk">
@@ -254,7 +271,13 @@ export default function PlayerProfile() {
       </h2>
       <div className="mt-3 flex flex-wrap gap-2">
         {achievements.map((a) => (
-          <AchievementChip key={a.id} label={a.label} description={a.description} unlockedAt={a.unlockedAt} />
+          <AchievementChip
+            key={a.id}
+            id={a.id}
+            label={a.label}
+            description={a.description}
+            unlockedAt={a.unlockedAt}
+          />
         ))}
       </div>
 
@@ -328,9 +351,10 @@ export default function PlayerProfile() {
           <li key={record.opponentId} className="flex items-center justify-between gap-3 px-4 py-3">
             <Link
               to={`/head-to-head?a=${playerId}&b=${record.opponentId}`}
-              className="min-w-0 truncate font-display text-sm font-bold text-chalk hover:text-gold"
+              className="flex min-w-0 items-center gap-2 truncate font-display text-sm font-bold text-chalk hover:text-gold"
             >
-              {record.opponentName}
+              <RacerBadge id={record.opponentId} name={record.opponentName} />
+              <span className="truncate">{record.opponentName}</span>
             </Link>
             <span className="flex shrink-0 items-baseline gap-3 font-mono text-sm">
               <span className="text-chalk">

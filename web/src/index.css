@@ -18,6 +18,12 @@
   --color-boost: #35d07f;
   --color-spin: #ff5a47;
 
+  /* Podium tiers below the leader — a cool platinum for 2nd, a warm copper
+     for 3rd, so all three medal spots read at a glance the way the game's
+     own podium ceremony does. */
+  --color-silver: #b9c3d4;
+  --color-bronze: #c17a4d;
+
   /* Player-marker colors, in Mario Kart's own HUD order, extended to a full
      12-racer set — one distinct color per driver, the way a select screen
      has one badge color per character. Mirrored as hex in lib/palette.ts for

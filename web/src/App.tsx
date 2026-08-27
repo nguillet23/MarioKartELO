@@ -6,8 +6,7 @@ import Analytics from './pages/Analytics'
 import HeadToHead from './pages/HeadToHead'
 import PlayerProfile from './pages/PlayerProfile'
 import Records from './pages/Records'
-import Matchmaking from './pages/Matchmaking'
-import { BalanceIcon, FlagIcon, PodiumIcon, StarIcon, TrendIcon, VersusIcon } from './components/NavIcons'
+import { FlagIcon, PodiumIcon, StarIcon, TrendIcon, VersusIcon } from './components/NavIcons'
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   [
@@ -84,12 +83,6 @@ export default function App() {
                 full="Head to Head"
               />
               <NavItem to="/records" icon={<StarIcon className="h-full w-full" />} short="Records" full="Records" />
-              <NavItem
-                to="/matchmaking"
-                icon={<BalanceIcon className="h-full w-full" />}
-                short="Match"
-                full="Matchmaking"
-              />
               <NavItem to="/submit" icon={<FlagIcon className="h-full w-full" />} short="Submit" full="Submit GP" />
             </nav>
           </div>
@@ -101,7 +94,6 @@ export default function App() {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/head-to-head" element={<HeadToHead />} />
             <Route path="/records" element={<Records />} />
-            <Route path="/matchmaking" element={<Matchmaking />} />
             <Route path="/player/:playerId" element={<PlayerProfile />} />
             <Route path="/submit" element={<SubmitGP />} />
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -19,7 +19,7 @@ export const RACER_COLORS = [
 
 /**
  * A stable color per racer id, so the same person reads as the same color
- * everywhere they show up — leaderboard, matchmaking, the submit form —
+ * everywhere they show up — leaderboard, the submit form, head to head —
  * rather than a color tied to whatever slot or sort order they happen to
  * land in on a given page.
  */

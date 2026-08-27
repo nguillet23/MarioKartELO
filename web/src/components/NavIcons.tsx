@@ -52,17 +52,6 @@ export function StarIcon({ className }: IconProps) {
   )
 }
 
-export function BalanceIcon({ className }: IconProps) {
-  return (
-    <svg className={className} {...shared}>
-      <path d="M10 2 V5" />
-      <path d="M5 11.5 L10 5 L15 11.5" />
-      <circle cx="5" cy="14" r="2.3" />
-      <circle cx="15" cy="14" r="2.3" />
-    </svg>
-  )
-}
-
 export function FlagIcon({ className }: IconProps) {
   return (
     <svg className={className} {...shared}>

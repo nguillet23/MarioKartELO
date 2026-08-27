@@ -4,6 +4,7 @@ import { rosterFromHistory, formatGpDate, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
 import { headToHead, opponentRecords } from '../lib/stats'
 import PageHeader from '../components/PageHeader'
+import RacerBadge from '../components/RacerBadge'
 
 const UNSELECTED = ''
 type View = 'pairwise' | 'matrix'
@@ -293,12 +294,13 @@ export default function HeadToHead() {
           {record && (
             <>
               <div className="panel mt-6 p-5">
-                <div className="flex items-baseline justify-between gap-3">
+                <div className="flex items-center justify-between gap-3">
                   <Link
                     to={`/player/${aId}`}
-                    className="truncate font-display text-lg font-bold text-chalk hover:text-gold"
+                    className="flex min-w-0 items-center gap-2 truncate font-display text-lg font-bold text-chalk hover:text-gold"
                   >
-                    {nameOf(aId)}
+                    <RacerBadge id={aId} name={nameOf(aId)} />
+                    <span className="truncate">{nameOf(aId)}</span>
                   </Link>
                   <span className="shrink-0 font-mono text-2xl text-chalk">
                     {record.wins}–{record.losses}
@@ -306,9 +308,10 @@ export default function HeadToHead() {
                   </span>
                   <Link
                     to={`/player/${bId}`}
-                    className="truncate text-right font-display text-lg font-bold text-chalk hover:text-gold"
+                    className="flex min-w-0 items-center justify-end gap-2 truncate text-right font-display text-lg font-bold text-chalk hover:text-gold"
                   >
-                    {nameOf(bId)}
+                    <span className="truncate">{nameOf(bId)}</span>
+                    <RacerBadge id={bId} name={nameOf(bId)} />
                   </Link>
                 </div>
 
