@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { expectedScore } from '../lib/elo'
 import { supabase } from '../lib/supabaseClient'
 import PageHeader from '../components/PageHeader'
+import RacerBadge from '../components/RacerBadge'
 
 type Team = 'a' | 'b'
 
@@ -69,7 +70,10 @@ function TeamPanel({
               className="flex w-full items-center justify-between gap-2 rounded-lg border border-line px-3 py-2 text-left text-sm transition-colors hover:border-gold"
               title="Move to the other team"
             >
-              <span className="min-w-0 truncate font-display font-bold text-chalk">{p.name}</span>
+              <span className="flex min-w-0 items-center gap-2">
+                <RacerBadge id={p.id} name={p.name} />
+                <span className="min-w-0 truncate font-display font-bold text-chalk">{p.name}</span>
+              </span>
               <span className="shrink-0 font-mono text-xs text-haze">{p.elo}</span>
             </button>
           </li>
@@ -177,12 +181,13 @@ export default function Matchmaking() {
                   key={p.id}
                   type="button"
                   onClick={() => toggleSelected(p.id)}
-                  className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                  className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
                     active
                       ? 'border-gold bg-gold/10 text-gold'
                       : 'border-line text-haze hover:text-chalk'
                   }`}
                 >
+                  <RacerBadge id={p.id} name={p.name} />
                   {p.name}
                 </button>
               )

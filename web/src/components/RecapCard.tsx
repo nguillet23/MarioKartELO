@@ -97,7 +97,7 @@ export default function RecapCard({ recap }: { recap: Recap }) {
           <li
             key={entry.playerId}
             className={`grid grid-cols-[2.25rem_1fr_auto] items-center gap-3 px-4 py-3 ${
-              entry.rank === 1 ? 'bg-gold/5' : ''
+              entry.rank === 1 ? 'itembox-shine bg-gold/5' : ''
             }`}
           >
             <Ordinal rank={entry.rank} className="text-xl" />
