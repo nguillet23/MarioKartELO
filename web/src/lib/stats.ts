@@ -6,7 +6,7 @@
 // a new table: `gp_results` already stores each player's points and the exact
 // rating they carried into and out of every GP.
 
-import { expectedScore, pairwiseEloExchange } from './elo'
+import { expectedScore, pairwiseEloExchange, placementBonuses } from './elo'
 import { rosterFromHistory } from './history'
 import type { GrandPrix, GpEntry } from './history'
 
@@ -107,6 +107,7 @@ export function opponentRecords(history: GrandPrix[], playerId: string): Opponen
     if (!me) continue
 
     const gpCount = counts.get(gp.id)?.get(playerId) ?? 0
+    const myBonus = placementBonuses(gp.entries).get(playerId) ?? 0
 
     for (const other of gp.entries) {
       if (other.playerId === playerId) continue
@@ -124,8 +125,8 @@ export function opponentRecords(history: GrandPrix[], playerId: string): Opponen
       }
 
       const eloSwing = pairwiseEloExchange(
-        { rating: me.eloBefore, points: me.points, gpCount },
-        { rating: other.eloBefore, points: other.points },
+        { points: me.points, gpCount, placementBonus: myBonus },
+        { points: other.points },
         gp.entries.length,
       )
 

@@ -16,7 +16,7 @@ import PageHeader from '../components/PageHeader'
 import RecapCard from '../components/RecapCard'
 import RacerBadge from '../components/RacerBadge'
 
-const MIN_PLAYERS = 2
+const MIN_PLAYERS = 4
 const MAX_PLAYERS = 12
 const DEFAULT_PLAYERS = 4
 const UNSELECTED = ''

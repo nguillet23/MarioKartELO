@@ -8,6 +8,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
+  type TooltipProps,
 } from 'recharts'
 import { supabase } from '../lib/supabaseClient'
 import { loadHistory } from '../lib/loadHistory'
@@ -43,17 +44,36 @@ type ChartMode = 'elo' | 'rank'
  * all-time position — consistent with a window restricting points-and-record
  * stats rather than rating itself (see `windowHistory` in `stats.ts`).
  */
+/** Suffix marking whether a row's value for a player is a real result (1) or a zero-fill for a GP they sat out (0) — read back by ChartTooltip to hide the latter. */
+const RACED_SUFFIX = '__raced'
+
 function buildChartData(history: GrandPrix[], knownPlayerIds: Set<string>) {
   const eloRows: ChartRow[] = []
   const rankRows: ChartRow[] = []
   const latestElo = new Map<string, number>()
+  // Players who have debuted as of GPs already processed — only these get
+  // zero-filled when they sit one out, so a player's line doesn't start
+  // (falsely, at 0) before they've ever raced.
+  const started = new Set<string>()
 
   history.forEach((gp, i) => {
     const eloRow: ChartRow = { seq: i + 1 }
+    const racedThisGp = new Set<string>()
     for (const entry of gp.entries) {
       if (!knownPlayerIds.has(entry.playerId)) continue
       eloRow[entry.playerId] = entry.eloAfter
+      eloRow[`${entry.playerId}${RACED_SUFFIX}`] = 1
       latestElo.set(entry.playerId, entry.eloAfter)
+      racedThisGp.add(entry.playerId)
+      started.add(entry.playerId)
+    }
+    // Zero-fill everyone else who's already debuted so the line has no gaps
+    // to bridge — a flat drop to 0 rather than connectNulls interpolating a
+    // slope across GPs where nothing happened to that player's rating.
+    for (const playerId of started) {
+      if (racedThisGp.has(playerId)) continue
+      eloRow[playerId] = 0
+      eloRow[`${playerId}${RACED_SUFFIX}`] = 0
     }
     eloRows.push(eloRow)
 
@@ -82,6 +102,42 @@ function windowedPointsByPlayer(history: GrandPrix[]): Map<string, { points: num
     }
   }
   return totals
+}
+
+/**
+ * Drops any series from the tooltip whose value at this point is a zero-fill
+ * (see RACED_SUFFIX in buildChartData) rather than a real result — a player
+ * who sat out a GP shows a flat 0 in the line so it has no gap, but the
+ * tooltip should stay silent about them rather than claim their rating hit 0.
+ */
+function ChartTooltip({ active, payload, label }: TooltipProps<number, string>) {
+  if (!active || !payload?.length) return null
+
+  const row = payload[0]?.payload as ChartRow | undefined
+  const visible = payload.filter((entry) => {
+    const raced = row?.[`${entry.dataKey}${RACED_SUFFIX}`]
+    return raced === undefined || raced === 1
+  })
+  if (visible.length === 0) return null
+
+  return (
+    <div
+      style={{
+        background: '#1c1930',
+        border: `1px solid ${GRID_COLOR}`,
+        borderRadius: '0.5rem',
+        fontSize: 13,
+        padding: '8px 12px',
+      }}
+    >
+      <p style={{ color: AXIS_COLOR, margin: 0 }}>{`Grand prix ${label}`}</p>
+      {visible.map((entry) => (
+        <p key={String(entry.dataKey)} style={{ color: entry.color, margin: 0 }}>
+          {`${entry.name}: ${entry.value}`}
+        </p>
+      ))}
+    </div>
+  )
 }
 
 function MiniLeaderboard({
@@ -287,16 +343,7 @@ export default function Analytics() {
                   reversed={mode === 'rank'}
                   domain={mode === 'rank' ? [1, maxRank] : ['auto', 'auto']}
                 />
-                <Tooltip
-                  contentStyle={{
-                    background: '#1c1930',
-                    border: `1px solid ${GRID_COLOR}`,
-                    borderRadius: '0.5rem',
-                    fontSize: 13,
-                  }}
-                  labelFormatter={(seq) => `Grand prix ${seq}`}
-                  labelStyle={{ color: AXIS_COLOR }}
-                />
+                <Tooltip content={<ChartTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
                 {players.map((player, index) => (
                   // dataKey is the player id, not the name: Recharts reads a
@@ -310,7 +357,6 @@ export default function Analytics() {
                     name={player.name}
                     stroke={RACER_COLORS[index % RACER_COLORS.length]}
                     strokeWidth={2}
-                    connectNulls
                     dot={false}
                   />
                 ))}

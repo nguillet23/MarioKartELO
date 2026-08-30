@@ -5,6 +5,8 @@ import {
   DEFAULT_K,
   kFactorFor,
   MIN_ELO,
+  PLACEMENT_BONUS_UNIT,
+  placementBonuses,
   PROVISIONAL_GP_COUNT,
   PROVISIONAL_K,
   type GpParticipant,
@@ -53,14 +55,17 @@ describe('computeGpElo', () => {
     expect(b.eloDelta).toBeCloseTo(0, 10)
   })
 
-  it('rewards beating a higher-rated player more than beating a lower-rated one', () => {
+  it('gives the same credit for the same result regardless of either rating', () => {
+    // A player's own rating stopped setting what's "expected" of them: beating
+    // a lower-rated opponent by 30 nets the same as beating a higher-rated one
+    // by 30 — the exchange only looks at points, never at either rating.
     const beatsLowerRated = computeGpElo([settled('a', 100, 60), settled('b', 80, 30)])
     const beatsHigherRated = computeGpElo([settled('a', 100, 60), settled('b', 120, 30)])
 
     const gainVsLower = beatsLowerRated.find((u) => u.playerId === 'a')!.eloDelta
     const gainVsHigher = beatsHigherRated.find((u) => u.playerId === 'a')!.eloDelta
 
-    expect(gainVsHigher).toBeGreaterThan(gainVsLower)
+    expect(gainVsHigher).toBe(gainVsLower)
   })
 
   it('ranks deltas in the same order as points when ratings are equal', () => {
@@ -76,16 +81,20 @@ describe('computeGpElo', () => {
     expect(byPlayer.c).toBeGreaterThan(byPlayer.d)
   })
 
-  it('scales with a custom K factor', () => {
+  it('scales the margin-based portion with a custom K factor', () => {
     const participants = [settled('a', 100, 60), settled('b', 100, 30)]
     const normal = computeGpElo(participants, { k: DEFAULT_K })
     const doubled = computeGpElo(participants, { k: DEFAULT_K * 2 })
 
     const normalDelta = normal.find((u) => u.playerId === 'a')!.eloDelta
     const doubledDelta = doubled.find((u) => u.playerId === 'a')!.eloDelta
-    // Within 1, not exact: both deltas are independently rounded to whole
-    // numbers, so doubling K can land either side of a .5 boundary.
-    expect(Math.abs(doubledDelta - normalDelta * 2)).toBeLessThanOrEqual(1)
+    // The flat placement bonus doesn't scale with K — only the margin-based
+    // portion doubles, so doubling K roughly doubles the total minus the one
+    // bonus that didn't get doubled. Within 1, not exact: both deltas are
+    // independently rounded to whole numbers.
+    expect(
+      Math.abs(doubledDelta - (2 * normalDelta - PLACEMENT_BONUS_UNIT)),
+    ).toBeLessThanOrEqual(1)
   })
 
   it('scales pairwise comparisons correctly for a 12-player field', () => {
@@ -159,6 +168,80 @@ describe('margin of victory', () => {
   })
 })
 
+describe('placementBonuses', () => {
+  it('sums to exactly 0 across a field of distinct finishes', () => {
+    const bonuses = placementBonuses([
+      { playerId: 'a', points: 60 },
+      { playerId: 'b', points: 40 },
+      { playerId: 'c', points: 20 },
+      { playerId: 'd', points: 4 },
+    ])
+    const total = [...bonuses.values()].reduce((sum, b) => sum + b, 0)
+    expect(total).toBeCloseTo(0, 10)
+    expect(bonuses.get('a')).toBe(PLACEMENT_BONUS_UNIT)
+    expect(bonuses.get('d')).toBe(-PLACEMENT_BONUS_UNIT)
+  })
+
+  it('splits tied ranks evenly and still sums to 0', () => {
+    // b and c tie for 2nd/3rd — each gets the average of those two spots.
+    const bonuses = placementBonuses([
+      { playerId: 'a', points: 60 },
+      { playerId: 'b', points: 30 },
+      { playerId: 'c', points: 30 },
+      { playerId: 'd', points: 4 },
+    ])
+    expect(bonuses.get('b')).toBe(bonuses.get('c'))
+    const total = [...bonuses.values()].reduce((sum, b) => sum + b, 0)
+    expect(total).toBeCloseTo(0, 10)
+  })
+
+  it('gives every player 0 in a total tie', () => {
+    const bonuses = placementBonuses([
+      { playerId: 'a', points: 30 },
+      { playerId: 'b', points: 30 },
+    ])
+    expect(bonuses.get('a')).toBeCloseTo(0, 10)
+    expect(bonuses.get('b')).toBeCloseTo(0, 10)
+  })
+
+  it('caps at PLACEMENT_BONUS_UNIT regardless of field size', () => {
+    const bonuses = placementBonuses(
+      Array.from({ length: 12 }, (_, i) => ({ playerId: `p${i}`, points: 60 - i * 5 })),
+    )
+    expect(bonuses.get('p0')).toBe(PLACEMENT_BONUS_UNIT)
+    expect(bonuses.get('p11')).toBe(-PLACEMENT_BONUS_UNIT)
+  })
+})
+
+describe('placement bonus in computeGpElo', () => {
+  it('can turn a close 2nd behind a distant leader from a net loss into a net gain', () => {
+    // Without a placement bonus, a distant leader plus a tightly-bunched pack
+    // can leave the runner-up with a net loss even though they finished 2nd:
+    // one big loss to the leader can outweigh two small wins over 3rd/4th.
+    const updates = computeGpElo([
+      settled('leader', 100, 55),
+      settled('runnerUp', 100, 31),
+      settled('third', 100, 29),
+      settled('fourth', 100, 28),
+    ])
+    const runnerUp = updates.find((u) => u.playerId === 'runnerUp')!
+    expect(runnerUp.eloDelta).toBeGreaterThanOrEqual(0)
+  })
+
+  it("still lets 2nd place net a loss where the bonus doesn't reach them", () => {
+    // The bonus is a small nudge, not a blanket guarantee. In a 3-player
+    // field 2nd place sits at the exact midpoint, so its bonus is 0 — a big
+    // enough loss to the leader still nets a loss, same as always.
+    const updates = computeGpElo([
+      settled('leader', 100, 60),
+      settled('runnerUp', 100, 5),
+      settled('third', 100, 4),
+    ])
+    const runnerUp = updates.find((u) => u.playerId === 'runnerUp')!
+    expect(runnerUp.eloDelta).toBeLessThan(0)
+  })
+})
+
 describe('kFactorFor', () => {
   it('starts at PROVISIONAL_K for a brand-new player', () => {
     expect(kFactorFor(0)).toBeCloseTo(PROVISIONAL_K, 10)
@@ -206,11 +289,12 @@ describe('the rating floor', () => {
     computeGpElo(lowField(rating)).find((u) => u.playerId === 'd')!
 
   it('truncates a loss that would cross the floor', () => {
-    // Unclamped this is -7 (see the rating of 8 below, which has room for it).
+    // Unclamped this is -9 (margin plus last place's placement penalty) —
+    // see the rating of 10 below, which has room for it.
     const clamped = lastPlace(5)
     expect(clamped.eloAfter).toBe(MIN_ELO)
     expect(clamped.eloDelta).toBe(-5)
-    expect(lastPlace(8).eloDelta).toBe(-7)
+    expect(lastPlace(10).eloDelta).toBe(-9)
   })
 
   it('never returns a rating below the floor', () => {
