@@ -62,3 +62,14 @@ export function FlagIcon({ className }: IconProps) {
     </svg>
   )
 }
+
+export function ShuffleIcon({ className }: IconProps) {
+  return (
+    <svg className={className} {...shared}>
+      <path d="M2.5 6 H6.5 C9 6 9 14 13.5 14 H17" />
+      <path d="M2.5 14 H6.5 C9 14 9 6 13.5 6 H17" />
+      <path d="M14.5 3.5 L17.5 6 L14.5 8.5" />
+      <path d="M14.5 11.5 L17.5 14 L14.5 16.5" />
+    </svg>
+  )
+}

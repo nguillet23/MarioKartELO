@@ -58,6 +58,12 @@ jobs:
 
   deploy:
     needs: build
+    # workflow_dispatch can be run by hand against any branch from the
+    # Actions tab (the push trigger above is already main-only) — without
+    # this guard, running it against a feature branch builds fine but then
+    # fails here, since the Pages environment only accepts deploys from
+    # main. Skip the deploy job cleanly instead.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

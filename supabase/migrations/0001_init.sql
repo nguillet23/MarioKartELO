@@ -103,8 +103,8 @@ begin
     raise exception 'invalid password';
   end if;
 
-  if jsonb_typeof(results) <> 'array' or jsonb_array_length(results) < 2 then
-    raise exception 'a grand prix needs at least 2 players';
+  if jsonb_typeof(results) <> 'array' or jsonb_array_length(results) < 4 then
+    raise exception 'a grand prix needs at least 4 players';
   end if;
 
   if (select count(distinct e.value->>'player_id') from jsonb_array_elements(results) e)

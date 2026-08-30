@@ -44,9 +44,9 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
 describe('replayHistory', () => {
   it('reproduces the stored ratings exactly when replayed with the same rules', () => {
     const history = makeHistory([
-      { field: [['a', 60], ['b', 30], ['c', 4]] },
-      { field: [['a', 20], ['b', 50], ['c', 30]] },
-      { field: [['a', 40], ['b', 40], ['c', 10]] },
+      { field: [['a', 60], ['b', 30], ['c', 20], ['d', 4]] },
+      { field: [['a', 20], ['b', 50], ['c', 30], ['d', 10]] },
+      { field: [['a', 40], ['b', 40], ['c', 10], ['d', 5]] },
     ])
 
     const { history: replayed, finalRatings } = replayHistory(history)
@@ -67,7 +67,7 @@ describe('replayHistory', () => {
   })
 
   it('leaves points and rank untouched, only recomputing rating', () => {
-    const history = makeHistory([{ field: [['a', 60], ['b', 30], ['c', 4]] }])
+    const history = makeHistory([{ field: [['a', 60], ['b', 30], ['c', 20], ['d', 4]] }])
     const { history: replayed } = replayHistory(history)
 
     expect(replayed[0].entries.map((e) => ({ playerId: e.playerId, points: e.points, rank: e.rank }))).toEqual(
@@ -77,9 +77,9 @@ describe('replayHistory', () => {
 
   it('changes downstream ratings when a grand prix is excluded, standing in for voiding it', () => {
     const history = makeHistory([
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 20], ['b', 40]] },
+      { field: [['a', 60], ['b', 4], ['c', 30], ['d', 20]] },
+      { field: [['a', 60], ['b', 4], ['c', 30], ['d', 20]] },
+      { field: [['a', 20], ['b', 40], ['c', 10], ['d', 5]] },
     ])
 
     const withoutMiddle = [history[0], history[2]]
@@ -90,7 +90,7 @@ describe('replayHistory', () => {
   })
 
   it('a higher K produces a bigger swing than a lower one, standing in for retuning constants', () => {
-    const history = makeHistory([{ field: [['a', 60], ['b', 4]] }])
+    const history = makeHistory([{ field: [['a', 60], ['b', 4], ['c', 30], ['d', 20]] }])
 
     const lowK = replayHistory(history, { k: 8 })
     const highK = replayHistory(history, { k: 32 })
