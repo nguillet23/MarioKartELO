@@ -100,10 +100,32 @@ function weightedShuffle(ids: string[], gpsTonight: Map<string, number>): string
     .map((entry) => entry.id)
 }
 
+export interface SuggestNextRaceOptions {
+  now?: Date
+  /**
+   * Who actually won the last race, overriding whatever `history` says.
+   * The match-making tab's own suggestions typically run ahead of what's
+   * been entered on Submit GP — a table can play through several races
+   * before anyone submits one — so `lastRaceWinners` derived from `history`
+   * goes stale mid-session unless this is supplied. Undefined (not just an
+   * empty set) falls back to `history`; the match-making page clears its
+   * own picks after each suggestion so the next one starts deferring to
+   * history again until someone marks a new winner by hand.
+   */
+  manualWinners?: Iterable<string>
+}
+
 /**
  * Suggests who races next and who sits out, from whoever's currently active.
  * Purely a proposal — the match-making page lets someone swap players in or
  * out by hand before anyone actually races (PLAN.md: manual override).
+ *
+ * `raceSize` is how many should race next — not everyone always wants a full
+ * 12 (e.g. only 8 controllers tonight). It's clamped into what a real GP
+ * allows (`MIN_RACE_SIZE`..`MAX_RACE_SIZE`) and never asked to exceed how
+ * many are actually present. Win-stays-on takes priority over it: if more
+ * players are tied for the win than the target size, they all still race —
+ * that can only push the target up, never require sitting out a winner.
  *
  * Returns null when there aren't enough active players to suggest a race at
  * all — the same 4-player floor a real GP needs (`MIN_RACE_SIZE`).
@@ -111,20 +133,28 @@ function weightedShuffle(ids: string[], gpsTonight: Map<string, number>): string
 export function suggestNextRace(
   history: GrandPrix[],
   activePlayerIds: string[],
-  now: Date = new Date(),
+  raceSize: number,
+  options: SuggestNextRaceOptions = {},
 ): RaceSuggestion | null {
   if (activePlayerIds.length < MIN_RACE_SIZE) return null
 
-  if (activePlayerIds.length <= MAX_RACE_SIZE) {
-    return { racing: [...activePlayerIds], sittingOut: [], stayedOn: [] }
+  const now = options.now ?? new Date()
+  const winners = options.manualWinners ? new Set(options.manualWinners) : lastRaceWinners(history, now)
+  const stayedOn = activePlayerIds.filter((id) => winners.has(id))
+
+  const targetSize = Math.min(
+    Math.max(Math.round(raceSize), MIN_RACE_SIZE, stayedOn.length),
+    MAX_RACE_SIZE,
+    activePlayerIds.length,
+  )
+
+  if (activePlayerIds.length <= targetSize) {
+    return { racing: [...activePlayerIds], sittingOut: [], stayedOn }
   }
 
-  const winners = lastRaceWinners(history, now)
-  const stayedOn = activePlayerIds.filter((id) => winners.has(id))
   const rest = activePlayerIds.filter((id) => !winners.has(id))
-
   const gpsTonight = gpsTonightFor(history, activePlayerIds, now)
-  const slotsLeft = Math.max(MAX_RACE_SIZE - stayedOn.length, 0)
+  const slotsLeft = Math.max(targetSize - stayedOn.length, 0)
   const shuffled = weightedShuffle(rest, gpsTonight)
 
   return {

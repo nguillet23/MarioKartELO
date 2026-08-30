@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import type { GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
-import { gpsTonightFor, MIN_RACE_SIZE, suggestNextRace, type RaceSuggestion } from '../lib/matchmaking'
+import {
+  gpsTonightFor,
+  MAX_RACE_SIZE,
+  MIN_RACE_SIZE,
+  suggestNextRace,
+  type RaceSuggestion,
+} from '../lib/matchmaking'
 import PageHeader from '../components/PageHeader'
 import RacerBadge from '../components/RacerBadge'
 
@@ -27,10 +33,23 @@ export default function MatchMaking() {
   // synced across devices (PLAN.md: one "clipboard holder" for the night).
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set())
 
+  // How many should race next — not everyone wants a full 12 (e.g. only 8
+  // controllers tonight). Defaults to the floor rather than the cap, same
+  // as SubmitGP's own default field count; clamped for real inside
+  // suggestNextRace, so a blank or out-of-range value here can't break it.
+  const [raceSizeInput, setRaceSizeInput] = useState(String(MIN_RACE_SIZE))
+
   const [suggestion, setSuggestion] = useState<RaceSuggestion | null>(null)
   // Manual override, seeded from `suggestion` each time it's (re)generated —
   // the algorithm proposes, this is what actually gets edited by hand.
   const [racingIds, setRacingIds] = useState<Set<string>>(new Set())
+
+  // Who actually won the race currently shown in `racingIds` — the table
+  // often plays several races before anyone submits one to Submit GP, so
+  // history alone can't tell the next suggestion who just won. Cleared
+  // after each "Suggest again" (it's fed in as that click's manualWinners,
+  // then reset so the next race's picker starts blank).
+  const [manualWinnerIds, setManualWinnerIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     async function loadRoster() {
@@ -65,12 +84,18 @@ export default function MatchMaking() {
     // Whoever's actually present just changed, so any suggestion already on
     // screen no longer reflects it — clear it rather than let it go stale.
     setSuggestion(null)
+    setManualWinnerIds(new Set())
   }
 
   function runSuggestion() {
-    const result = suggestNextRace(history, [...activeIds])
+    const parsedSize = Number(raceSizeInput)
+    const raceSize = Number.isFinite(parsedSize) ? parsedSize : MIN_RACE_SIZE
+    const result = suggestNextRace(history, [...activeIds], raceSize, {
+      manualWinners: manualWinnerIds.size > 0 ? manualWinnerIds : undefined,
+    })
     setSuggestion(result)
     setRacingIds(new Set(result?.racing ?? []))
+    setManualWinnerIds(new Set())
   }
 
   function moveToSitOut(id: string) {
@@ -83,6 +108,15 @@ export default function MatchMaking() {
 
   function moveToRacing(id: string) {
     setRacingIds((prev) => new Set(prev).add(id))
+  }
+
+  function toggleManualWinner(id: string) {
+    setManualWinnerIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   const activeList = roster.filter((p) => activeIds.has(p.id))
@@ -136,11 +170,38 @@ export default function MatchMaking() {
       </section>
 
       <section className="mt-8">
+        <label className="block max-w-40" htmlFor="race-size">
+          <span className="block text-[10px] font-medium uppercase tracking-[0.2em] text-haze">
+            Racing at once
+          </span>
+          <input
+            id="race-size"
+            type="number"
+            inputMode="numeric"
+            min={MIN_RACE_SIZE}
+            max={MAX_RACE_SIZE}
+            value={raceSizeInput}
+            onChange={(e) => {
+              setRaceSizeInput(e.target.value)
+              // Same reasoning as toggleActive: an on-screen suggestion no
+              // longer reflects a changed input, so clear it rather than
+              // leave a stale one showing.
+              setSuggestion(null)
+              setManualWinnerIds(new Set())
+            }}
+            className="field mt-2"
+          />
+        </label>
+        <p className="mt-1.5 text-xs text-haze">
+          How many should race next ({MIN_RACE_SIZE}–{MAX_RACE_SIZE}) — a tie for the win can push
+          this higher, but it'll never sit out someone who just won.
+        </p>
+
         <button
           type="button"
           onClick={runSuggestion}
           disabled={activeIds.size < MIN_RACE_SIZE}
-          className="rounded-lg bg-gold px-4 py-3.5 font-display text-base font-bold uppercase tracking-wide text-asphalt transition-opacity disabled:opacity-40"
+          className="mt-4 rounded-lg bg-gold px-4 py-3.5 font-display text-base font-bold uppercase tracking-wide text-asphalt transition-opacity disabled:opacity-40"
         >
           {suggestion ? 'Suggest again' : 'Suggest next race'}
         </button>
@@ -152,15 +213,17 @@ export default function MatchMaking() {
                 Racing next
               </h3>
               <p className="mt-1 text-xs text-haze">
-                Tap anyone to move them to sitting out instead — this is a suggestion, not a rule.
+                Tap a name to move them to sitting out instead — this is a suggestion, not a rule.
+                Once they've actually raced, mark who won so the next suggestion keeps them in —
+                that overrides what's on record until the GP is submitted.
               </p>
               <ol className="panel mt-3 divide-y divide-line">
                 {[...racingIds].map((id) => (
-                  <li key={id}>
+                  <li key={id} className="flex items-center gap-2 px-4 py-2.5">
                     <button
                       type="button"
                       onClick={() => moveToSitOut(id)}
-                      className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-pit-hi"
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
                     >
                       <RacerBadge id={id} name={nameById.get(id) ?? '?'} size="sm" />
                       <span className="min-w-0 flex-1 truncate font-display text-sm font-bold text-chalk">
@@ -176,6 +239,18 @@ export default function MatchMaking() {
                           Hasn't played
                         </span>
                       )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleManualWinner(id)}
+                      aria-pressed={manualWinnerIds.has(id)}
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+                        manualWinnerIds.has(id)
+                          ? 'bg-gold text-asphalt'
+                          : 'border border-line text-haze hover:text-chalk'
+                      }`}
+                    >
+                      {manualWinnerIds.has(id) ? 'Won ✓' : 'Mark won'}
                     </button>
                   </li>
                 ))}

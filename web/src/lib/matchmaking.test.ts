@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { GrandPrix, GpEntry } from './history'
-import { gpsTonightFor, lastRaceWinners, MAX_RACE_SIZE, suggestNextRace } from './matchmaking'
+import {
+  gpsTonightFor,
+  lastRaceWinners,
+  MAX_RACE_SIZE,
+  MIN_RACE_SIZE,
+  suggestNextRace,
+} from './matchmaking'
 
 /** A minimal GrandPrix fixture — matchmaking.ts only reads playerId and
  * rank off entries, and playedAt off the GP itself, so the Elo fields are
@@ -80,12 +86,12 @@ describe('lastRaceWinners', () => {
 
 describe('suggestNextRace', () => {
   it('suggests nothing below the 4-player floor', () => {
-    expect(suggestNextRace([], ['a', 'b', 'c'], NOW)).toBeNull()
+    expect(suggestNextRace([], ['a', 'b', 'c'], MAX_RACE_SIZE, { now: NOW })).toBeNull()
   })
 
-  it('sends the whole active pool to race, nobody sitting out, at or under the cap', () => {
+  it('sends the whole active pool to race, nobody sitting out, at or under the requested size', () => {
     const active = ['a', 'b', 'c', 'd', 'e']
-    const suggestion = suggestNextRace([], active, NOW)!
+    const suggestion = suggestNextRace([], active, MAX_RACE_SIZE, { now: NOW })!
     expect(suggestion.racing).toEqual(active)
     expect(suggestion.sittingOut).toEqual([])
     expect(suggestion.stayedOn).toEqual([])
@@ -94,20 +100,89 @@ describe('suggestNextRace', () => {
   it('always keeps last GP\'s winner racing, over the cap', () => {
     const history = [gp('gp-1', '2026-01-01T20:00:00Z', [['w', 1], ['b', 2], ['c', 3], ['d', 4]])]
     const active = ['w', ...Array.from({ length: 14 }, (_, i) => `p${i}`)]
-    const suggestion = suggestNextRace(history, active, NOW)!
+    const suggestion = suggestNextRace(history, active, MAX_RACE_SIZE, { now: NOW })!
     expect(suggestion.stayedOn).toEqual(['w'])
     expect(suggestion.racing).toContain('w')
   })
 
   it('partitions the active pool exactly, caps racing at MAX_RACE_SIZE, over the cap', () => {
     const active = Array.from({ length: 15 }, (_, i) => `p${i}`)
-    const suggestion = suggestNextRace([], active, NOW)!
+    const suggestion = suggestNextRace([], active, MAX_RACE_SIZE, { now: NOW })!
 
     expect(suggestion.racing.length).toBe(MAX_RACE_SIZE)
     expect(suggestion.racing.length + suggestion.sittingOut.length).toBe(active.length)
     expect(new Set([...suggestion.racing, ...suggestion.sittingOut])).toEqual(new Set(active))
     // No overlap between the two lists.
     expect(suggestion.racing.some((id) => suggestion.sittingOut.includes(id))).toBe(false)
+  })
+
+  it('honors a requested race size smaller than the cap', () => {
+    const active = Array.from({ length: 10 }, (_, i) => `p${i}`)
+    const suggestion = suggestNextRace([], active, 6, { now: NOW })!
+    expect(suggestion.racing.length).toBe(6)
+    expect(suggestion.sittingOut.length).toBe(4)
+  })
+
+  it('clamps a requested size below MIN_RACE_SIZE up to the floor', () => {
+    const active = Array.from({ length: 10 }, (_, i) => `p${i}`)
+    const suggestion = suggestNextRace([], active, 1, { now: NOW })!
+    expect(suggestion.racing.length).toBe(MIN_RACE_SIZE)
+  })
+
+  it('clamps a requested size above MAX_RACE_SIZE down to the cap', () => {
+    const active = Array.from({ length: 15 }, (_, i) => `p${i}`)
+    const suggestion = suggestNextRace([], active, 99, { now: NOW })!
+    expect(suggestion.racing.length).toBe(MAX_RACE_SIZE)
+  })
+
+  it('never asks a requested size to exceed how many are actually present', () => {
+    const active = ['a', 'b', 'c', 'd', 'e']
+    const suggestion = suggestNextRace([], active, MAX_RACE_SIZE, { now: NOW })!
+    expect(suggestion.racing.length).toBe(active.length)
+    expect(suggestion.sittingOut).toEqual([])
+  })
+
+  it('lets a tie for the win push racing above the requested size, never sitting a winner out', () => {
+    const history = [
+      gp('gp-1', '2026-01-01T20:00:00Z', [['a', 1], ['b', 1], ['c', 1], ['d', 1], ['e', 5], ['f', 6]]),
+    ]
+    const active = ['a', 'b', 'c', 'd', 'e', 'f']
+    // Requesting a race of 4 with 4 people tied for the win: all 4 winners
+    // still race, even though that alone already meets the request, and e/f
+    // are the ones left to fight over any remaining slots.
+    const suggestion = suggestNextRace(history, active, 4, { now: NOW })!
+    expect(suggestion.stayedOn.sort()).toEqual(['a', 'b', 'c', 'd'])
+    for (const winner of ['a', 'b', 'c', 'd']) expect(suggestion.racing).toContain(winner)
+  })
+
+  it('lets manualWinners override whatever history says', () => {
+    // History says 'a' won, but the table has already raced ahead of what's
+    // been submitted to Submit GP and 'z' actually just won — manualWinners
+    // is how the match-making page tells it that.
+    const history = [gp('gp-1', '2026-01-01T20:00:00Z', [['a', 1], ['b', 2], ['c', 3], ['d', 4]])]
+    const active = ['a', 'b', 'c', 'd', 'z']
+    const suggestion = suggestNextRace(history, active, MIN_RACE_SIZE, {
+      now: NOW,
+      manualWinners: ['z'],
+    })!
+    expect(suggestion.stayedOn).toEqual(['z'])
+  })
+
+  it('falls back to history when manualWinners is undefined', () => {
+    const history = [gp('gp-1', '2026-01-01T20:00:00Z', [['a', 1], ['b', 2], ['c', 3], ['d', 4]])]
+    const active = ['a', 'b', 'c', 'd']
+    const suggestion = suggestNextRace(history, active, MIN_RACE_SIZE, { now: NOW })!
+    expect(suggestion.stayedOn).toEqual(['a'])
+  })
+
+  it('treats an explicitly empty manualWinners as "nobody stays on", not a fallback to history', () => {
+    const history = [gp('gp-1', '2026-01-01T20:00:00Z', [['a', 1], ['b', 2], ['c', 3], ['d', 4]])]
+    const active = ['a', 'b', 'c', 'd']
+    const suggestion = suggestNextRace(history, active, MIN_RACE_SIZE, {
+      now: NOW,
+      manualWinners: [],
+    })!
+    expect(suggestion.stayedOn).toEqual([])
   })
 
   it('weights toward players with fewer GPs tonight, without making it a strict sort', () => {
@@ -136,7 +211,9 @@ describe('suggestNextRace', () => {
     let highSelected = 0
     const trials = 200
     for (let i = 0; i < trials; i++) {
-      const suggestion = suggestNextRace(history, active, new Date('2026-01-01T23:00:00Z'))!
+      const suggestion = suggestNextRace(history, active, MAX_RACE_SIZE, {
+        now: new Date('2026-01-01T23:00:00Z'),
+      })!
       lowSelected += lowIds.filter((id) => suggestion.racing.includes(id)).length
       highSelected += highIds.filter((id) => suggestion.racing.includes(id)).length
     }
