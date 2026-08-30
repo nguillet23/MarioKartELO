@@ -29,19 +29,21 @@ export const STARTING_ELO = 100
  *
  * A floor is not free: a clamped player loses less than the field gained off
  * them, so that GP quietly creates rating out of nothing. That's fine as a rare
- * safety net and corrosive as a routine event — which is what RATING_SCALE is
- * sized to prevent.
+ * safety net and corrosive as a routine event — if a player is camped at 0
+ * for many GPs running, that's a sign DEFAULT_K or MARGIN_WEIGHT are too
+ * aggressive for this group, not something to patch here.
  */
 export const MIN_ELO = 0
 /**
  * The scale's unit: a gap of this many points means 10:1 odds. Standard Elo
  * uses 400 against a 1500 base; this is the same ratio against a 100 base.
  *
- * It has to move with STARTING_ELO. Left at 400 on a 100-point base, ratings
- * would need to spread ~150 points apart before the math stopped pushing them
- * further — simulating a settled 4-player group lands at [517, 336, 184, 0],
- * with the last player pinned on the floor permanently. At 80 the same group
- * settles around [152, 115, 84, 44] and the floor never comes into it.
+ * No longer used by the rating update itself — `computeGpElo` below doesn't
+ * compare a player's own rating to their opponents' to decide what was
+ * "expected" of them, so a big favorite isn't set up to lose ground just
+ * because one opponent had an outlier night. This only feeds `expectedScore`,
+ * which survives as a win-probability estimate for storytelling (upsets,
+ * achievements) derived from ratings after the fact, not from what set them.
  */
 export const RATING_SCALE = 80
 
@@ -60,6 +62,19 @@ export const POINTS_SPREAD = MAX_GP_POINTS - MIN_GP_POINTS
  * (10/56)² would flatten nearly every real result back down to a tie.
  */
 export const MARGIN_WEIGHT = 0.5
+
+/**
+ * Zero-sum bonus for where you actually finished, on top of the margin-based
+ * exchange: 1st gets +PLACEMENT_BONUS_UNIT, last gets -PLACEMENT_BONUS_UNIT,
+ * evenly spaced in between, regardless of field size.
+ *
+ * Margin alone can leave a GP's runner-up with a net loss even though they
+ * finished 2nd: a distant leader plus a tightly-bunched pack behind them
+ * means 2nd's one big loss (to the leader) can outweigh their two small wins
+ * (over 3rd and 4th). This bonus guarantees finishing position always counts
+ * for something, without needing a big margin to back it up.
+ */
+export const PLACEMENT_BONUS_UNIT = 2
 
 export interface GpParticipant {
   playerId: string
@@ -96,6 +111,14 @@ export function kFactorFor(gpCount: number): number {
   return PROVISIONAL_K - (PROVISIONAL_K - DEFAULT_K) * progress
 }
 
+/**
+ * A rating-implied win probability. Used only for "how surprising was this
+ * result" storytelling in stats.ts (upsets, the Giant Slayer achievement) —
+ * `computeGpElo` below no longer calls this. A player's own rating stopped
+ * being a factor in what's "expected" of them for the rating update itself,
+ * so nothing there compares ratings to decide who was favored before
+ * assigning credit.
+ */
 export function expectedScore(ratingA: number, ratingB: number): number {
   return 1 / (1 + 10 ** ((ratingB - ratingA) / RATING_SCALE))
 }
@@ -117,6 +140,37 @@ export function actualScore(
   return pointsA > pointsB ? 0.5 + credit : 0.5 - credit
 }
 
+/**
+ * Each player's placement bonus for this GP, keyed by playerId. Exported
+ * separately from `computeGpElo` so `pairwiseEloExchange` (and its caller,
+ * `opponentRecords` in stats.ts) can split the same bonus across pairwise
+ * matchups and still reconstruct a player's full delta by summing them.
+ *
+ * Ties split the positions they span — e.g. tied for 2nd and 3rd both get
+ * the average of those two spots' bonus — so the total across the field is
+ * exactly 0 no matter how the points land, same as the margin exchange.
+ */
+export function placementBonuses(
+  entries: { playerId: string; points: number }[],
+): Map<string, number> {
+  const n = entries.length
+  const sorted = [...entries].sort((a, b) => b.points - a.points)
+  const bonuses = new Map<string, number>()
+
+  let i = 0
+  while (i < n) {
+    let j = i
+    while (j + 1 < n && sorted[j + 1].points === sorted[i].points) j++
+    // Positions i..j (0-indexed) are tied — average their 1-indexed ranks.
+    const avgRank = (i + 1 + (j + 1)) / 2
+    const bonus = (PLACEMENT_BONUS_UNIT * (n + 1 - 2 * avgRank)) / (n - 1)
+    for (let pos = i; pos <= j; pos++) bonuses.set(sorted[pos].playerId, bonus)
+    i = j + 1
+  }
+
+  return bonuses
+}
+
 export function computeGpElo(
   participants: GpParticipant[],
   options: EloOptions = {},
@@ -130,14 +184,19 @@ export function computeGpElo(
 
   const { k, marginWeight = MARGIN_WEIGHT } = options
   const n = participants.length
+  const bonuses = placementBonuses(participants)
 
   return participants.map((player) => {
     let sum = 0
     for (const opponent of participants) {
       if (opponent.playerId === player.playerId) continue
-      sum +=
-        actualScore(player.points, opponent.points, marginWeight) -
-        expectedScore(player.rating, opponent.rating)
+      // No expectedScore term: a player's own rating no longer sets what's
+      // "expected" of them against a given opponent — every matchup starts
+      // from a flat coin flip regardless of either player's rating, and
+      // actualScore (who out-scored whom, and by how much) alone decides the
+      // credit. Still exactly zero-sum before rounding: 0.5 + 0.5 = 1, same
+      // as actualScore(a,b) + actualScore(b,a) = 1.
+      sum += actualScore(player.points, opponent.points, marginWeight) - 0.5
     }
 
     // Each player uses their own K, so a provisional player can move further
@@ -146,10 +205,15 @@ export function computeGpElo(
     // accepted tradeoff for letting new ratings settle quickly.
     const playerK = k ?? kFactorFor(player.gpCount)
 
+    // The placement bonus is flat and K-independent — it's a reward for
+    // where you finished, not a margin-driven exchange, so a rookie's
+    // faster-moving K doesn't inflate it the way it inflates the margin term.
+    const placementBonus = bonuses.get(player.playerId) ?? 0
+
     // Rounded to a whole number so ratings always display/store as integers
     // (eloAfter is derived from the rounded delta, not rounded separately,
     // so eloAfter - eloBefore === eloDelta stays exact).
-    const rawDelta = Math.round((playerK / (n - 1)) * sum)
+    const rawDelta = Math.round((playerK / (n - 1)) * sum + placementBonus)
 
     // The floor is applied to the rating and the delta is re-derived from it,
     // never the other way round: `void_last_gp` undoes a GP by subtracting
@@ -169,11 +233,13 @@ export function computeGpElo(
 /**
  * The share of one player's GP rating change that came from a single opponent.
  *
- * `computeGpElo` sums `actualScore - expectedScore` across the whole field and
- * scales the total once; this is the same expression for one opponent only, so
- * summing it over every opponent reproduces that player's delta (before the
- * final rounding). That's what makes "net Elo between just these two" a real
- * number rather than an approximation — see `headToHead` in `stats.ts`.
+ * `computeGpElo` sums `actualScore - 0.5` across the whole field, adds the
+ * flat placement bonus once, and scales; this reproduces the margin half of
+ * that expression for one opponent only, plus an even split of the
+ * placement bonus (`placementBonus / (fieldSize - 1)`, so summing over every
+ * opponent adds it back up to the full bonus). That's what makes "net Elo
+ * between just these two" a real number rather than an approximation — see
+ * `headToHead` in `stats.ts`.
  *
  * Deliberately kept as a separate function rather than folded back into
  * `computeGpElo`: the rated algorithm rounds once, at the end, and splitting
@@ -185,8 +251,8 @@ export function computeGpElo(
  * truncated the loss, so they'll overstate what the player actually paid.
  */
 export function pairwiseEloExchange(
-  player: { rating: number; points: number; gpCount: number },
-  opponent: { rating: number; points: number },
+  player: { points: number; gpCount: number; placementBonus: number },
+  opponent: { points: number },
   fieldSize: number,
   options: EloOptions = {},
 ): number {
@@ -196,8 +262,7 @@ export function pairwiseEloExchange(
   const playerK = k ?? kFactorFor(player.gpCount)
 
   return (
-    (playerK / (fieldSize - 1)) *
-    (actualScore(player.points, opponent.points, marginWeight) -
-      expectedScore(player.rating, opponent.rating))
+    (playerK / (fieldSize - 1)) * (actualScore(player.points, opponent.points, marginWeight) - 0.5) +
+    player.placementBonus / (fieldSize - 1)
   )
 }

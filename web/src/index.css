@@ -2,27 +2,32 @@
 
 /*
   "Results Screen" — the moment after a grand prix ends, read on a phone.
-  Ground is a deep blue-violet (a track at night, not a neutral black), the
-  leader is coin gold, and every rating is set in a mono face so the columns
-  line up like a timing board.
+  Ground is Villanova navy (a track at night under Wildcat lights, not a
+  neutral black), the leader is coin gold, and every rating is set in a mono
+  face so the columns line up like a timing board. --color-nova is the
+  program's second brand color — Villanova's own athletic light blue —
+  used sparingly as a livery accent alongside the racing gold.
 */
 @theme {
-  --color-asphalt: #14121f;
-  --color-pit: #1c1930;
-  --color-pit-hi: #252038;
-  --color-line: #322c4a;
-  --color-chalk: #f2effc;
-  --color-haze: #948cb4;
+  --color-asphalt: #0a1428;
+  --color-pit: #0f1d3a;
+  --color-pit-hi: #16294c;
+  --color-line: #28406e;
+  --color-chalk: #f4f7fc;
+  --color-haze: #90a0c9;
 
   --color-gold: #ffc42b;
+  --color-nova: #4cb4e7;
   --color-boost: #35d07f;
   --color-spin: #ff5a47;
 
-  /* Podium tiers below the leader — a cool platinum for 2nd, a warm copper
-     for 3rd, so all three medal spots read at a glance the way the game's
-     own podium ceremony does. */
+  /* Podium tiers below the leader — a cool platinum for 2nd, and for 3rd a
+     warm antique gold pulled from Villanova's own metallic-gold spec
+     (Pantone 871), so the bronze spot doubles as a nod to the University's
+     accent color — so all three medal spots read at a glance the way the
+     game's own podium ceremony does. */
   --color-silver: #b9c3d4;
-  --color-bronze: #c17a4d;
+  --color-bronze: #b3915c;
 
   /* Player-marker colors, in Mario Kart's own HUD order, extended to a full
      12-racer set — one distinct color per driver, the way a select screen
@@ -56,10 +61,11 @@
     background-color: var(--color-asphalt);
     color: var(--color-chalk);
     font-family: var(--font-sans);
-    /* Faint start-line glow so the ground isn't a flat field of color. */
+    /* Faint start-line glow, in Villanova's own light blue, so the ground
+       isn't a flat field of color. */
     background-image: radial-gradient(
       120% 60% at 50% 0%,
-      rgb(58 134 240 / 0.1),
+      rgb(76 180 231 / 0.12),
       transparent 70%
     );
     background-repeat: no-repeat;
@@ -72,14 +78,29 @@
 }
 
 @layer components {
-  /* The one checkered element on the site: a hairline under each page title. */
+  /* The signature mark: a finish-line checker flag run in Wildcat colors
+     (nova blue / coin gold) instead of a neutral checkerboard — one small,
+     bold flourish under each page title where both themes meet at once. */
   .checker-rule {
     height: 8px;
     background: repeating-conic-gradient(
-        var(--color-line) 0% 25%,
-        transparent 0% 50%
+        var(--color-nova) 0% 25%,
+        var(--color-gold) 0% 50%
       )
       0 0 / 8px 8px;
+  }
+
+  /* A thin livery stripe across the very top of the page — the nose-stripe
+     a race car carries in team colors, done here in Villanova blue and
+     gold. */
+  .livery-stripe {
+    height: 3px;
+    background: linear-gradient(
+      90deg,
+      var(--color-nova),
+      var(--color-gold) 50%,
+      var(--color-nova)
+    );
   }
 
   /* Signature: race-position ordinals, slanted for speed. */

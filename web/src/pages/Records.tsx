@@ -87,8 +87,9 @@ function SessionCard({ session }: { session: Session }) {
 
           <ol className="divide-y divide-line bg-pit-hi/40">
             {session.gps.map((gp) => (
-              <li key={gp.id} className="px-4 py-2 text-xs text-haze">
-                {formatGpDate(gp.playedAt)} ·{' '}
+              <li key={gp.id} className="px-4 py-3 text-sm text-chalk">
+                <span className="text-haze">{formatGpDate(gp.playedAt)}</span>
+                {' · '}
                 {[...gp.entries]
                   .sort((a, b) => a.rank - b.rank)
                   .map((e) => `${e.playerName} ${e.points}`)
@@ -149,7 +150,7 @@ export default function Records() {
   const sessions = useMemo(() => [...sessionsFromHistory(history)].reverse(), [history])
 
   return (
-    <div className="mx-auto max-w-2xl px-5 py-8">
+    <div className="mx-auto max-w-4xl px-5 py-8">
       <PageHeader
         title="Records"
         subtitle={

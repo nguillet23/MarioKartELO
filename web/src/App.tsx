@@ -50,6 +50,7 @@ export default function App() {
       {/* dvh, not vh: iOS Safari's address bar changes the real viewport height. */}
       <div className="min-h-dvh pb-24 sm:pb-0">
         <header className="sticky top-0 z-20 border-b border-line bg-asphalt/85 backdrop-blur">
+          <div className="livery-stripe" aria-hidden="true" />
           <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-3">
             <NavLink to="/" end className="leading-none">
               <span className="block text-[10px] font-medium uppercase tracking-[0.25em] text-haze">

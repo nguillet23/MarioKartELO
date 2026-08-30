@@ -21,6 +21,7 @@ import {
   rivalOf,
   streaksFor,
   windowGpsFor,
+  windowHistory,
   WINDOW_OPTIONS,
   type StatsWindow,
 } from '../lib/stats'
@@ -65,8 +66,8 @@ function AchievementChip({
   )
 }
 
-const AXIS_COLOR = '#948cb4'
-const GRID_COLOR = '#322c4a'
+const AXIS_COLOR = '#90a0c9'
+const GRID_COLOR = '#28406e'
 const GOLD = '#ffc42b'
 
 function Stat({
@@ -152,15 +153,39 @@ export default function PlayerProfile() {
     }
   }, [windowedGps, playerId])
 
-  const chartRows = useMemo(
-    () =>
-      windowedGps.map((gp, index) => ({
-        seq: index + 1,
-        elo: entryFor(gp, playerId)!.eloAfter,
-        playedAt: gp.playedAt,
-      })),
-    [windowedGps, playerId],
-  )
+  // The whole-history rating line, carrying the rating flat (delta 0) across
+  // any GP the player sat out, so the chart never skips or gaps — it starts
+  // once they've raced their first GP and stays continuous from there.
+  const chartRows = useMemo(() => {
+    let currentElo: number | null = null
+    const series: { gp: GrandPrix; elo: number; played: boolean }[] = []
+    for (const gp of history) {
+      const entry = entryFor(gp, playerId)
+      if (entry) currentElo = entry.eloAfter
+      if (currentElo === null) continue
+      series.push({ gp, elo: currentElo, played: entry !== undefined })
+    }
+
+    let windowed = series
+    if (statsWindow.kind === 'lastN') {
+      const playedIdx = series.reduce<number[]>((acc, row, index) => {
+        if (row.played) acc.push(index)
+        return acc
+      }, [])
+      const start =
+        playedIdx.length >= statsWindow.n ? playedIdx[playedIdx.length - statsWindow.n] : 0
+      windowed = series.slice(start)
+    } else if (statsWindow.kind !== 'all') {
+      const inWindow = new Set(windowHistory(history, statsWindow).map((gp) => gp.id))
+      windowed = series.filter((row) => inWindow.has(row.gp.id))
+    }
+
+    return windowed.map((row, index) => ({
+      seq: index + 1,
+      elo: row.elo,
+      playedAt: row.gp.playedAt,
+    }))
+  }, [history, playerId, statsWindow])
 
   if (error) {
     return (
@@ -329,7 +354,7 @@ export default function PlayerProfile() {
             />
             <Tooltip
               contentStyle={{
-                background: '#1c1930',
+                background: '#0f1d3a',
                 border: `1px solid ${GRID_COLOR}`,
                 borderRadius: '0.5rem',
                 fontSize: 13,

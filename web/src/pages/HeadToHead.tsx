@@ -44,15 +44,18 @@ function Matrix({ history, roster }: { history: GrandPrix[]; roster: { id: strin
   }
 
   return (
-    <div className="panel mt-6 overflow-x-auto">
-      <table className="w-full border-collapse text-center text-xs">
+    <div className="panel mt-6">
+      {/* table-fixed divides the columns after the name up evenly, so the
+          grid always fits the panel's width — up to a 15x15 roster — with no
+          horizontal scrollbar; cells just shrink and truncate as the roster grows. */}
+      <table className="w-full table-fixed border-collapse text-center text-xs">
         <thead>
           <tr>
-            <th className="sticky left-0 z-10 bg-pit p-2" />
+            <th className="w-20 bg-pit p-2 sm:w-28" />
             {roster.map((col) => (
               <th
                 key={col.id}
-                className="min-w-16 truncate p-2 font-display text-[11px] font-bold uppercase tracking-tight text-haze"
+                className="truncate p-2 font-display text-[11px] font-bold uppercase tracking-tight text-haze"
                 title={col.name}
               >
                 {col.name}
@@ -64,8 +67,9 @@ function Matrix({ history, roster }: { history: GrandPrix[]; roster: { id: strin
           {rows.map((row) => (
             <tr key={row.player.id} className="border-t border-line">
               <th
-                className="sticky left-0 z-10 whitespace-nowrap bg-pit p-2 text-left font-display text-[11px] font-bold uppercase tracking-tight text-chalk"
+                className="truncate bg-pit p-2 text-left font-display text-[11px] font-bold uppercase tracking-tight text-chalk"
                 scope="row"
+                title={row.player.name}
               >
                 {row.player.name}
               </th>
@@ -170,7 +174,7 @@ export default function HeadToHead() {
   const samePlayer = bothPicked && aId === bId
 
   return (
-    <div className={`mx-auto px-5 py-8 ${view === 'matrix' ? 'max-w-4xl' : 'max-w-2xl'}`}>
+    <div className="mx-auto max-w-7xl px-5 py-8">
       <PageHeader
         title="Head to head"
         subtitle="Two racers, every grand prix they've both been in."
