@@ -32,6 +32,13 @@ interface GpSpec {
  * stats re-derive each player's K factor from how many GPs they had played at
  * the time, so a fixture that faked those counts would be testing against
  * numbers the app never stored.
+ *
+ * Every fixture field below carries at least 4 players — `computeGpElo`
+ * requires it, matching the real minimum a grand prix can be submitted with
+ * (PLAN.md's match-making tab notes). Most fields pad the original 2-/3-player
+ * scenario with low-scoring filler players ('w', 'x') who don't disturb the
+ * specific comparison a test is making; a few spots note why the filler's
+ * points were placed where they were.
  */
 function makeHistory(specs: GpSpec[]): GrandPrix[] {
   const ratings = new Map<string, number>()
@@ -109,19 +116,19 @@ function makeHistoryAt(specs: { field: [string, number][]; playedAt: string }[])
 describe('groupIntoGrandPrix', () => {
   it('orders grand prix oldest first and entries by points, highest first', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['a', 10], ['b', 50]] },
+      { field: [['a', 40], ['b', 20], ['c', 10], ['d', 4]] },
+      { field: [['a', 10], ['b', 50], ['c', 8], ['d', 4]] },
     ])
 
     expect(history.map((gp) => gp.id)).toEqual(['gp-1', 'gp-2'])
-    expect(history[0].entries.map((e) => e.playerId)).toEqual(['a', 'b'])
-    expect(history[1].entries.map((e) => e.playerId)).toEqual(['b', 'a'])
+    expect(history[0].entries.map((e) => e.playerId)).toEqual(['a', 'b', 'c', 'd'])
+    expect(history[1].entries.map((e) => e.playerId)).toEqual(['b', 'a', 'c', 'd'])
   })
 
   it('gives tied players the same place and skips the next one', () => {
-    const history = makeHistory([{ field: [['a', 40], ['b', 40], ['c', 10]] }])
+    const history = makeHistory([{ field: [['a', 40], ['b', 40], ['c', 10], ['d', 4]] }])
     const ranks = Object.fromEntries(history[0].entries.map((e) => [e.playerId, e.rank]))
-    expect(ranks).toEqual({ a: 1, b: 1, c: 3 })
+    expect(ranks).toEqual({ a: 1, b: 1, c: 3, d: 4 })
   })
 
   it('drops rows whose grand prix has no timestamp', () => {
@@ -145,9 +152,9 @@ describe('groupIntoGrandPrix', () => {
 describe('headToHead', () => {
   it('counts each GP the pair both raced, and only those', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['a', 40], ['c', 20]] },
-      { field: [['a', 20], ['b', 40], ['c', 30]] },
+      { field: [['a', 40], ['b', 20], ['w', 10], ['x', 5]] },
+      { field: [['a', 40], ['c', 20], ['w', 10], ['x', 5]] },
+      { field: [['a', 20], ['b', 40], ['c', 30], ['w', 10]] },
     ])
 
     const record = headToHead(history, 'a', 'b')!
@@ -159,21 +166,27 @@ describe('headToHead', () => {
 
   it('is null for a pair who have never shared a grand prix', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['c', 40], ['d', 20]] },
+      { field: [['a', 40], ['b', 20], ['w', 10], ['x', 5]] },
+      { field: [['c', 40], ['d', 20], ['w', 10], ['x', 5]] },
     ])
     expect(headToHead(history, 'a', 'c')).toBeNull()
   })
 
   it('is null for a player against themselves', () => {
-    const history = makeHistory([{ field: [['a', 40], ['b', 20]] }])
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 10], ['x', 5]] }])
     expect(headToHead(history, 'a', 'a')).toBeNull()
   })
 
   it('mirrors: what one player takes off the other, the other loses', () => {
+    // a is rank 1 and b is rank 4 (last) in both GPs — the only ranks whose
+    // placement bonus is a fixed ±PLACEMENT_BONUS_UNIT regardless of field
+    // size, so bonus_a and bonus_b are exact negatives of each other and
+    // the mirror holds exactly (mid-field ranks' bonuses always net to 0
+    // between them, whatever c and d score, as long as they land strictly
+    // between a and b).
     const history = makeHistory([
-      { field: [['a', 50], ['b', 20], ['c', 30]] },
-      { field: [['a', 10], ['b', 40], ['c', 25]] },
+      { field: [['a', 50], ['c', 33], ['d', 20], ['b', 12]] },
+      { field: [['a', 40], ['c', 25], ['d', 15], ['b', 8]] },
     ])
 
     const ab = headToHead(history, 'a', 'b')!
@@ -184,8 +197,11 @@ describe('headToHead', () => {
   })
 
   it('is the pairwise share, not the difference in total GP deltas', () => {
-    // b out-scores c but both are buried by a: b still takes Elo off c.
-    const history = makeHistory([{ field: [['a', 60], ['b', 30], ['c', 20]] }])
+    // b out-scores c but both are buried by a: b still takes Elo off c. d
+    // sits between a and b (not below c) so it adds another loss for b
+    // rather than an easy extra win, preserving the "b still nets a loss"
+    // property the 3-player version of this fixture relied on.
+    const history = makeHistory([{ field: [['a', 60], ['b', 30], ['c', 20], ['d', 45]] }])
 
     const bc = headToHead(history, 'b', 'c')!
     expect(bc.netElo).toBeGreaterThan(0)
@@ -210,7 +226,7 @@ describe('headToHead', () => {
   })
 
   it('counts equal points as a tie for both', () => {
-    const history = makeHistory([{ field: [['a', 30], ['b', 30]] }])
+    const history = makeHistory([{ field: [['a', 30], ['b', 30], ['c', 20], ['d', 10]] }])
     const record = headToHead(history, 'a', 'b')!
     expect(record.ties).toBe(1)
     expect(record.wins).toBe(0)
@@ -221,44 +237,49 @@ describe('headToHead', () => {
 describe('opponentRecords', () => {
   it('lists every opponent, most-played first', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['a', 40], ['b', 20], ['c', 10]] },
+      { field: [['a', 40], ['b', 20], ['w', 8], ['x', 4]] },
+      { field: [['a', 40], ['b', 20], ['c', 10], ['w', 8], ['x', 4]] },
     ])
 
+    // b, w, and x all share both GPs; c only shares the second. Meeting
+    // count ties (b, w, x) break alphabetically.
     const records = opponentRecords(history, 'a')
-    expect(records.map((r) => r.opponentId)).toEqual(['b', 'c'])
+    expect(records.map((r) => r.opponentId)).toEqual(['b', 'w', 'x', 'c'])
     expect(records[0].meetings).toHaveLength(2)
   })
 
   it('is empty for a player with no history', () => {
-    expect(opponentRecords(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nobody')).toEqual([])
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 8], ['x', 4]] }])
+    expect(opponentRecords(history, 'nobody')).toEqual([])
   })
 })
 
 describe('rivalOf', () => {
   it('picks the opponent with the biggest Elo swing either way', () => {
     const history = makeHistory([
-      // a beats b decisively three times, and barely edges c once.
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 31], ['c', 30]] },
+      // a beats b decisively three times (w/x stay close to a, so they
+      // don't out-swing b), and barely edges c once.
+      { field: [['a', 60], ['b', 4], ['w', 40], ['x', 50]] },
+      { field: [['a', 60], ['b', 4], ['w', 40], ['x', 50]] },
+      { field: [['a', 60], ['b', 4], ['w', 40], ['x', 50]] },
+      { field: [['a', 31], ['c', 30], ['w', 20], ['x', 10]] },
     ])
 
     expect(rivalOf(history, 'a')?.opponentId).toBe('b')
   })
 
   it('is null for a player who has never raced', () => {
-    expect(rivalOf(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nobody')).toBeNull()
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 8], ['x', 4]] }])
+    expect(rivalOf(history, 'nobody')).toBeNull()
   })
 })
 
 describe('streaksFor', () => {
   it('counts a run of wins ending at the most recent GP', () => {
     const history = makeHistory([
-      { field: [['a', 10], ['b', 40]] },
-      { field: [['a', 40], ['b', 10]] },
-      { field: [['a', 40], ['b', 10]] },
+      { field: [['a', 10], ['b', 40], ['w', 30], ['x', 20]] },
+      { field: [['a', 40], ['b', 10], ['w', 20], ['x', 8]] },
+      { field: [['a', 40], ['b', 10], ['w', 20], ['x', 8]] },
     ])
 
     expect(streaksFor(history, 'a')).toEqual({ current: 2, longest: 2 })
@@ -266,10 +287,10 @@ describe('streaksFor', () => {
 
   it('resets the current streak on a loss but keeps the longest', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 10]] },
-      { field: [['a', 40], ['b', 10]] },
-      { field: [['a', 40], ['b', 10]] },
-      { field: [['a', 10], ['b', 40]] },
+      { field: [['a', 40], ['b', 10], ['w', 20], ['x', 8]] },
+      { field: [['a', 40], ['b', 10], ['w', 20], ['x', 8]] },
+      { field: [['a', 40], ['b', 10], ['w', 20], ['x', 8]] },
+      { field: [['a', 10], ['b', 40], ['w', 30], ['x', 20]] },
     ])
 
     expect(streaksFor(history, 'a')).toEqual({ current: 0, longest: 3 })
@@ -277,16 +298,16 @@ describe('streaksFor', () => {
 
   it('ignores grand prix the player sat out', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 10]] },
-      { field: [['b', 40], ['c', 10]] },
-      { field: [['a', 40], ['b', 10]] },
+      { field: [['a', 40], ['b', 10], ['w', 20], ['x', 8]] },
+      { field: [['b', 40], ['c', 10], ['w', 20], ['x', 8]] },
+      { field: [['a', 40], ['b', 10], ['w', 20], ['x', 8]] },
     ])
 
     expect(streaksFor(history, 'a').current).toBe(2)
   })
 
   it('counts a shared first place as a win for everyone tied at the top', () => {
-    const history = makeHistory([{ field: [['a', 40], ['b', 40], ['c', 10]] }])
+    const history = makeHistory([{ field: [['a', 40], ['b', 40], ['c', 10], ['d', 4]] }])
     expect(streaksFor(history, 'a').current).toBe(1)
     expect(streaksFor(history, 'b').current).toBe(1)
     expect(streaksFor(history, 'c').current).toBe(0)
@@ -296,8 +317,8 @@ describe('streaksFor', () => {
 describe('playerBests', () => {
   it('tracks peak rating, best GP, and worst GP', () => {
     const history = makeHistory([
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 20], ['b', 40]] },
+      { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+      { field: [['a', 20], ['b', 40], ['w', 30], ['x', 10]] },
     ])
 
     const bests = playerBests(history, 'a')!
@@ -310,30 +331,31 @@ describe('playerBests', () => {
   })
 
   it('flags a player who is at their all-time high right now', () => {
-    const history = makeHistory([{ field: [['a', 60], ['b', 4]] }])
+    const history = makeHistory([{ field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] }])
     expect(playerBests(history, 'a')!.atPeakNow).toBe(true)
     expect(playerBests(history, 'b')!.atPeakNow).toBe(false)
   })
 
   it('treats the rating carried into the first GP as the baseline peak', () => {
     // b has only ever lost ground, so their peak is where they started.
-    const history = makeHistory([{ field: [['a', 60], ['b', 4]] }])
+    const history = makeHistory([{ field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] }])
     const bests = playerBests(history, 'b')!
     expect(bests.peakElo).toBe(STARTING_ELO)
     expect(bests.peakEloAt).toBeNull()
   })
 
   it('is null for a player who has never raced', () => {
-    expect(playerBests(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nobody')).toBeNull()
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 8], ['x', 4]] }])
+    expect(playerBests(history, 'nobody')).toBeNull()
   })
 })
 
 describe('playersAtPeak', () => {
   it('agrees with playerBests for everyone in the history', () => {
     const history = makeHistory([
-      { field: [['a', 60], ['b', 20], ['c', 30]] },
-      { field: [['a', 10], ['b', 50], ['c', 30]] },
-      { field: [['a', 45], ['b', 20], ['c', 25]] },
+      { field: [['a', 60], ['b', 20], ['c', 30], ['d', 15]] },
+      { field: [['a', 10], ['b', 50], ['c', 30], ['d', 25]] },
+      { field: [['a', 45], ['b', 20], ['c', 25], ['d', 10]] },
     ])
 
     const atPeak = playersAtPeak(history)
@@ -345,16 +367,18 @@ describe('playersAtPeak', () => {
 
 describe('buildRecap', () => {
   it('names the biggest gainer and the biggest loser', () => {
-    const history = makeHistory([{ field: [['a', 60], ['b', 30], ['c', 4]] }])
+    const history = makeHistory([
+      { field: [['a', 60], ['b', 30], ['c', 4], ['d', 15]] },
+    ])
     const recap = buildRecap(history, 'gp-1')!
 
     expect(recap.biggestGainer.playerId).toBe('a')
     expect(recap.biggestLoser.playerId).toBe('c')
-    expect(recap.entries.map((e) => e.playerId)).toEqual(['a', 'b', 'c'])
+    expect(recap.entries.map((e) => e.playerId)).toEqual(['a', 'b', 'd', 'c'])
   })
 
   it('marks everyone in their first grand prix as a debut, with no records', () => {
-    const history = makeHistory([{ field: [['a', 60], ['b', 4]] }])
+    const history = makeHistory([{ field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] }])
     const recap = buildRecap(history, 'gp-1')!
 
     for (const entry of recap.entries) {
@@ -366,8 +390,8 @@ describe('buildRecap', () => {
 
   it('flags a personal-best points total and a new peak rating', () => {
     const history = makeHistory([
-      { field: [['a', 30], ['b', 20]] },
-      { field: [['a', 55], ['b', 20]] },
+      { field: [['a', 30], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 55], ['b', 20], ['w', 15], ['x', 10]] },
     ])
     const recap = buildRecap(history, 'gp-2')!
     const a = recap.entries.find((e) => e.playerId === 'a')!
@@ -380,8 +404,8 @@ describe('buildRecap', () => {
 
   it('flags a personal-worst points total', () => {
     const history = makeHistory([
-      { field: [['a', 30], ['b', 20]] },
-      { field: [['a', 8], ['b', 40]] },
+      { field: [['a', 30], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 8], ['b', 40], ['w', 15], ['x', 10]] },
     ])
     const a = buildRecap(history, 'gp-2')!.entries.find((e) => e.playerId === 'a')!
 
@@ -391,9 +415,9 @@ describe('buildRecap', () => {
 
   it('judges records against earlier GPs only, never later ones', () => {
     const history = makeHistory([
-      { field: [['a', 30], ['b', 20]] },
-      { field: [['a', 45], ['b', 20]] },
-      { field: [['a', 60], ['b', 4]] },
+      { field: [['a', 30], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 45], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 60], ['b', 4], ['w', 15], ['x', 10]] },
     ])
 
     // GP 2 was a's best at the time, even though GP 3 later beat it.
@@ -403,15 +427,16 @@ describe('buildRecap', () => {
   })
 
   it('is null for a grand prix id that is not in the history', () => {
-    expect(buildRecap(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nope')).toBeNull()
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 8], ['x', 4]] }])
+    expect(buildRecap(history, 'nope')).toBeNull()
   })
 
   it('flags an upset when a big underdog beats a big favorite', () => {
     const history = makeHistory([
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['b', 60], ['a', 4]] },
+      { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+      { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+      { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+      { field: [['b', 60], ['a', 4], ['w', 30], ['x', 20]] },
     ])
     const recap = buildRecap(history, 'gp-4')!
     const b = recap.entries.find((e) => e.playerId === 'b')!
@@ -422,7 +447,8 @@ describe('buildRecap', () => {
   })
 
   it('does not flag a win as an upset when the winner was already favored', () => {
-    const recap = buildRecap(makeHistory([{ field: [['a', 60], ['b', 4]] }]), 'gp-1')!
+    const history = makeHistory([{ field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] }])
+    const recap = buildRecap(history, 'gp-1')!
     expect(recap.entries.every((e) => e.upset === null)).toBe(true)
     expect(recap.biggestUpset).toBeNull()
   })
@@ -431,9 +457,9 @@ describe('buildRecap', () => {
 describe('recentForm', () => {
   it('sums Elo change over the last N GPs, not the full history', () => {
     const history = makeHistory([
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 4], ['b', 60]] },
+      { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+      { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+      { field: [['a', 4], ['b', 60], ['w', 30], ['x', 20]] },
     ])
     const lastTwoDeltas = history
       .slice(-2)
@@ -443,22 +469,23 @@ describe('recentForm', () => {
   })
 
   it('sums whatever is available when a player has fewer GPs than the window', () => {
-    const history = makeHistory([{ field: [['a', 40], ['b', 20]] }])
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 8], ['x', 4]] }])
     const delta = history[0].entries.find((e) => e.playerId === 'a')!.eloDelta
     expect(recentForm(history, 'a', 5)).toBe(delta)
   })
 
   it('is zero for a player with no history', () => {
-    expect(recentForm(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nobody')).toBe(0)
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 8], ['x', 4]] }])
+    expect(recentForm(history, 'nobody')).toBe(0)
   })
 })
 
 describe('pointsConsistency', () => {
   it('is zero for a player who scores the same every GP', () => {
     const history = makeHistory([
-      { field: [['a', 30], ['b', 20]] },
-      { field: [['a', 30], ['b', 40]] },
-      { field: [['a', 30], ['b', 10]] },
+      { field: [['a', 30], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 30], ['b', 40], ['w', 15], ['x', 10]] },
+      { field: [['a', 30], ['b', 10], ['w', 20], ['x', 15]] },
     ])
     expect(pointsConsistency(history, 'a')!.stdDev).toBe(0)
   })
@@ -466,17 +493,17 @@ describe('pointsConsistency', () => {
   it('is higher for a player whose scores swing wildly than one who stays close to their average', () => {
     const swingy = pointsConsistency(
       makeHistory([
-        { field: [['a', 60], ['b', 20]] },
-        { field: [['a', 4], ['b', 40]] },
-        { field: [['a', 60], ['b', 10]] },
+        { field: [['a', 60], ['b', 20], ['w', 15], ['x', 10]] },
+        { field: [['a', 4], ['b', 40], ['w', 15], ['x', 10]] },
+        { field: [['a', 60], ['b', 10], ['w', 15], ['x', 10]] },
       ]),
       'a',
     )!
     const steady = pointsConsistency(
       makeHistory([
-        { field: [['c', 30], ['d', 20]] },
-        { field: [['c', 32], ['d', 40]] },
-        { field: [['c', 28], ['d', 10]] },
+        { field: [['c', 30], ['d', 20], ['w', 15], ['x', 10]] },
+        { field: [['c', 32], ['d', 40], ['w', 15], ['x', 10]] },
+        { field: [['c', 28], ['d', 10], ['w', 15], ['x', 10]] },
       ]),
       'c',
     )!
@@ -485,16 +512,17 @@ describe('pointsConsistency', () => {
   })
 
   it('is null for a player who has never raced', () => {
-    expect(pointsConsistency(makeHistory([{ field: [['a', 40], ['b', 20]] }]), 'nobody')).toBeNull()
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 8], ['x', 4]] }])
+    expect(pointsConsistency(history, 'nobody')).toBeNull()
   })
 })
 
 describe('consistencyRankings', () => {
   it('ranks steadiest first', () => {
     const history = makeHistory([
-      { field: [['a', 30], ['b', 20], ['c', 10]] },
-      { field: [['a', 30], ['b', 50], ['c', 15]] },
-      { field: [['a', 30], ['b', 8], ['c', 20]] },
+      { field: [['a', 30], ['b', 20], ['c', 10], ['d', 5]] },
+      { field: [['a', 30], ['b', 50], ['c', 15], ['d', 6]] },
+      { field: [['a', 30], ['b', 8], ['c', 20], ['d', 4]] },
     ])
     const rankings = consistencyRankings(history, 3)
     expect(rankings[0].playerId).toBe('a')
@@ -503,8 +531,8 @@ describe('consistencyRankings', () => {
 
   it('excludes a player with fewer than minGps GPs', () => {
     const history = makeHistory([
-      { field: [['a', 30], ['b', 20]] },
-      { field: [['a', 30], ['c', 10]] },
+      { field: [['a', 30], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 30], ['c', 10], ['w', 15], ['x', 10]] },
     ])
     expect(consistencyRankings(history, 2).some((r) => r.playerId === 'c')).toBe(false)
   })
@@ -513,8 +541,8 @@ describe('consistencyRankings', () => {
 describe('attendance', () => {
   it('reports days since last played and this-month GP count', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['a', 40], ['b', 20]] },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] },
     ])
     const info = attendance(history, new Date('2026-01-10T00:00:00Z')).find(
       (r) => r.playerId === 'a',
@@ -526,7 +554,7 @@ describe('attendance', () => {
   })
 
   it('flags a player as drifted once they cross the threshold', () => {
-    const history = makeHistory([{ field: [['a', 40], ['b', 20]] }])
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] }])
     const info = attendance(history, new Date('2026-03-01T00:00:00Z')).find(
       (r) => r.playerId === 'a',
     )!
@@ -535,8 +563,8 @@ describe('attendance', () => {
 
   it('sorts most recently active first', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['b', 40], ['c', 20]] },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['b', 40], ['c', 20], ['w', 15], ['x', 10]] },
     ])
     const ids = attendance(history, new Date('2026-01-10T00:00:00Z')).map((r) => r.playerId)
     expect(ids[ids.length - 1]).toBe('a')
@@ -547,8 +575,8 @@ describe('buildRecordsBook', () => {
   it('finds the highest and worst single-GP points', () => {
     const book = buildRecordsBook(
       makeHistory([
-        { field: [['a', 60], ['b', 20]] },
-        { field: [['a', 30], ['b', 4]] },
+        { field: [['a', 60], ['b', 20], ['w', 15], ['x', 10]] },
+        { field: [['a', 30], ['b', 4], ['w', 15], ['x', 10]] },
       ]),
     )
     expect(book.highestPoints).toMatchObject({ playerId: 'a', value: 60 })
@@ -556,10 +584,12 @@ describe('buildRecordsBook', () => {
   })
 
   it('finds the closest GP and the biggest blowout', () => {
+    // w/x sit strictly between (or level with) each GP's existing extremes
+    // so the spread stays exactly what it was in the 2-player version.
     const book = buildRecordsBook(
       makeHistory([
-        { field: [['a', 32], ['b', 30]] },
-        { field: [['a', 60], ['b', 4]] },
+        { field: [['a', 32], ['b', 30], ['w', 31], ['x', 30]] },
+        { field: [['a', 60], ['b', 4], ['w', 50], ['x', 10]] },
       ]),
     )
     expect(book.closestGp?.spread).toBe(2)
@@ -569,9 +599,9 @@ describe('buildRecordsBook', () => {
   it('finds the longest win streak across everyone', () => {
     const book = buildRecordsBook(
       makeHistory([
-        { field: [['a', 40], ['b', 10]] },
-        { field: [['a', 40], ['b', 10]] },
-        { field: [['a', 40], ['b', 10]] },
+        { field: [['a', 40], ['b', 10], ['w', 25], ['x', 15]] },
+        { field: [['a', 40], ['b', 10], ['w', 25], ['x', 15]] },
+        { field: [['a', 40], ['b', 10], ['w', 25], ['x', 15]] },
       ]),
     )
     expect(book.longestStreak).toEqual({ playerId: 'a', playerName: 'A', length: 3 })
@@ -580,10 +610,10 @@ describe('buildRecordsBook', () => {
   it('finds the biggest upset across the whole history', () => {
     const book = buildRecordsBook(
       makeHistory([
-        { field: [['a', 60], ['b', 4]] },
-        { field: [['a', 60], ['b', 4]] },
-        { field: [['a', 60], ['b', 4]] },
-        { field: [['b', 60], ['a', 4]] },
+        { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+        { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+        { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+        { field: [['b', 60], ['a', 4], ['w', 30], ['x', 20]] },
       ]),
     )
     expect(book.biggestUpset?.playerId).toBe('b')
@@ -593,8 +623,8 @@ describe('buildRecordsBook', () => {
     // makeHistory spaces GPs a day apart, so each date has exactly one GP.
     const book = buildRecordsBook(
       makeHistory([
-        { field: [['a', 40], ['b', 10]] },
-        { field: [['a', 40], ['b', 10]] },
+        { field: [['a', 40], ['b', 10], ['w', 25], ['x', 15]] },
+        { field: [['a', 40], ['b', 10], ['w', 25], ['x', 15]] },
       ]),
     )
     expect(book.biggestNight?.count).toBe(1)
@@ -609,8 +639,8 @@ describe('buildRecordsBook', () => {
 describe('sessionsFromHistory', () => {
   it('groups grand prix into one session when the gap between them is small', () => {
     const history = makeHistoryAt([
-      { field: [['a', 40], ['b', 20]], playedAt: '2026-01-01T20:00:00Z' },
-      { field: [['a', 20], ['b', 40]], playedAt: '2026-01-01T21:00:00Z' },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]], playedAt: '2026-01-01T20:00:00Z' },
+      { field: [['a', 20], ['b', 40], ['w', 15], ['x', 10]], playedAt: '2026-01-01T21:00:00Z' },
     ])
     const sessions = sessionsFromHistory(history)
     expect(sessions).toHaveLength(1)
@@ -619,8 +649,8 @@ describe('sessionsFromHistory', () => {
 
   it('starts a new session once the gap exceeds the threshold', () => {
     const history = makeHistoryAt([
-      { field: [['a', 40], ['b', 20]], playedAt: '2026-01-01T20:00:00Z' },
-      { field: [['a', 20], ['b', 40]], playedAt: '2026-01-03T20:00:00Z' },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]], playedAt: '2026-01-01T20:00:00Z' },
+      { field: [['a', 20], ['b', 40], ['w', 15], ['x', 10]], playedAt: '2026-01-03T20:00:00Z' },
     ])
     const sessions = sessionsFromHistory(history)
     expect(sessions).toHaveLength(2)
@@ -628,9 +658,9 @@ describe('sessionsFromHistory', () => {
 
   it('ranks standings by total points across the whole session, not any one GP', () => {
     const history = makeHistoryAt([
-      { field: [['a', 10], ['b', 50]], playedAt: '2026-01-01T20:00:00Z' },
-      { field: [['a', 50], ['b', 10]], playedAt: '2026-01-01T21:00:00Z' },
-      { field: [['a', 50], ['b', 4]], playedAt: '2026-01-01T22:00:00Z' },
+      { field: [['a', 10], ['b', 50], ['w', 30], ['x', 20]], playedAt: '2026-01-01T20:00:00Z' },
+      { field: [['a', 50], ['b', 10], ['w', 30], ['x', 20]], playedAt: '2026-01-01T21:00:00Z' },
+      { field: [['a', 50], ['b', 4], ['w', 30], ['x', 20]], playedAt: '2026-01-01T22:00:00Z' },
     ])
     const [session] = sessionsFromHistory(history)
     expect(session.standings[0].playerId).toBe('a')
@@ -646,26 +676,26 @@ describe('sessionsFromHistory', () => {
 describe('windowHistory', () => {
   it('returns everything for an all-time window', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['a', 20], ['b', 40]] },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 20], ['b', 40], ['w', 15], ['x', 10]] },
     ])
     expect(windowHistory(history, { kind: 'all' })).toEqual(history)
   })
 
   it('keeps only the last N grand prix for a lastN window', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['a', 20], ['b', 40]] },
-      { field: [['a', 30], ['b', 30]] },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['a', 20], ['b', 40], ['w', 15], ['x', 10]] },
+      { field: [['a', 30], ['b', 30], ['w', 15], ['x', 10]] },
     ])
     expect(windowHistory(history, { kind: 'lastN', n: 2 })).toEqual(history.slice(-2))
   })
 
   it('keeps only grand prix within the last N days for a days window', () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] }, // 2026-01-01
-      { field: [['a', 40], ['b', 20]] }, // 2026-01-02
-      { field: [['a', 40], ['b', 20]] }, // 2026-01-03
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] }, // 2026-01-01
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] }, // 2026-01-02
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] }, // 2026-01-03
     ])
     const now = new Date('2026-01-03T20:00:00Z')
     const windowed = windowHistory(history, { kind: 'days', days: 1 }, now)
@@ -676,9 +706,9 @@ describe('windowHistory', () => {
 describe('windowGpsFor', () => {
   it("restricts to the player's own last N grand prix, not the field's", () => {
     const history = makeHistory([
-      { field: [['a', 40], ['b', 20]] },
-      { field: [['b', 40], ['c', 20]] }, // a sits this one out
-      { field: [['a', 20], ['b', 40]] },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] },
+      { field: [['b', 40], ['c', 20], ['w', 15], ['x', 10]] }, // a sits this one out
+      { field: [['a', 20], ['b', 40], ['w', 15], ['x', 10]] },
     ])
     const windowed = windowGpsFor(history, 'a', { kind: 'lastN', n: 1 })
     expect(windowed).toHaveLength(1)
@@ -689,8 +719,8 @@ describe('windowGpsFor', () => {
 describe('achievementsFor', () => {
   it('unlocks first win on the first GP a player finishes first in', () => {
     const history = makeHistory([
-      { field: [['a', 10], ['b', 40]] },
-      { field: [['a', 40], ['b', 10]] },
+      { field: [['a', 10], ['b', 40], ['w', 25], ['x', 15]] },
+      { field: [['a', 40], ['b', 10], ['w', 25], ['x', 15]] },
     ])
     const achievements = achievementsFor(history, 'a')
     expect(achievements.find((a) => a.id === 'first-win')?.unlockedAt).toBe(
@@ -699,7 +729,7 @@ describe('achievementsFor', () => {
   })
 
   it('unlocks clutch the first time a player scores at or above the threshold', () => {
-    const history = makeHistory([{ field: [['a', 55], ['b', 4]] }])
+    const history = makeHistory([{ field: [['a', 55], ['b', 4], ['w', 30], ['x', 20]] }])
     expect(achievementsFor(history, 'a').find((a) => a.id === 'clutch')?.unlockedAt).toBe(
       history[0].playedAt,
     )
@@ -708,11 +738,11 @@ describe('achievementsFor', () => {
 
   it('unlocks giant slayer only when beating the roster-wide top-rated player', () => {
     const history = makeHistory([
-      // a builds a big lead over b...
-      { field: [['a', 60], ['b', 4]] },
-      { field: [['a', 60], ['b', 4]] },
+      // a builds a big lead over b (and stays ahead of w/x too)...
+      { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
+      { field: [['a', 60], ['b', 4], ['w', 30], ['x', 20]] },
       // ...then c, a first-timer, out-scores a while a is still the roster's top rating.
-      { field: [['a', 4], ['c', 60]] },
+      { field: [['a', 4], ['c', 60], ['w', 30], ['x', 20]] },
     ])
     expect(achievementsFor(history, 'c').find((a) => a.id === 'giant-slayer')?.unlockedAt).toBe(
       history[2].playedAt,
@@ -721,10 +751,15 @@ describe('achievementsFor', () => {
   })
 
   it('unlocks regular exactly on the GP milestone, not before', () => {
-    const nine = Array.from({ length: 9 }, () => ({ field: [['a', 30], ['b', 30]] as [string, number][] }))
+    const nine = Array.from({ length: 9 }, () => ({
+      field: [['a', 30], ['b', 30], ['w', 20], ['x', 10]] as [string, number][],
+    }))
     expect(achievementsFor(makeHistory(nine), 'a').find((a) => a.id === 'regular')?.unlockedAt).toBeNull()
 
-    const ten = [...nine, { field: [['a', 30], ['b', 30]] as [string, number][] }]
+    const ten = [
+      ...nine,
+      { field: [['a', 30], ['b', 30], ['w', 20], ['x', 10]] as [string, number][] },
+    ]
     const history = makeHistory(ten)
     expect(achievementsFor(history, 'a').find((a) => a.id === 'regular')?.unlockedAt).toBe(
       history[9].playedAt,
@@ -733,8 +768,8 @@ describe('achievementsFor', () => {
 
   it('unlocks the sweep achievement when a player wins every GP in a multi-GP session', () => {
     const history = makeHistoryAt([
-      { field: [['a', 40], ['b', 20]], playedAt: '2026-01-01T20:00:00Z' },
-      { field: [['a', 40], ['b', 20]], playedAt: '2026-01-01T21:00:00Z' },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]], playedAt: '2026-01-01T20:00:00Z' },
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]], playedAt: '2026-01-01T21:00:00Z' },
     ])
     expect(achievementsFor(history, 'a').find((a) => a.id === 'sweep')?.unlockedAt).toBe(
       history[1].playedAt,
@@ -743,7 +778,7 @@ describe('achievementsFor', () => {
   })
 
   it('never unlocks the sweep achievement off a single-GP session', () => {
-    const history = makeHistory([{ field: [['a', 40], ['b', 20]] }])
+    const history = makeHistory([{ field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] }])
     expect(achievementsFor(history, 'a').find((a) => a.id === 'sweep')?.unlockedAt).toBeNull()
   })
 })

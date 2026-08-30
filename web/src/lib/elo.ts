@@ -175,8 +175,8 @@ export function computeGpElo(
   participants: GpParticipant[],
   options: EloOptions = {},
 ): EloUpdate[] {
-  if (participants.length < 2) {
-    throw new Error('computeGpElo requires at least 2 participants')
+  if (participants.length < 4) {
+    throw new Error('computeGpElo requires at least 4 participants')
   }
   if (new Set(participants.map((p) => p.playerId)).size !== participants.length) {
     throw new Error('computeGpElo requires unique playerIds')
