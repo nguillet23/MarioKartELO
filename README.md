@@ -1,217 +1,132 @@
 # Mario Kart Elo
 
 A friend-group Mario Kart Grand Prix tracker with a chess-style Elo rating
-per player. See `PLAN.md` for the full design.
+per player.
 
 ## Quick Commands
 
-Everything needed to run the app and check any change, in one place —
-no digging through the Supabase SQL below. All commands run from inside
-`web/` unless noted otherwise.
+All commands run from inside `web/` unless noted otherwise.
 
 **One-time setup**
-
-Install dependencies:
 
 ```bash
 cd web
 npm install
-```
-
-Create your local env file:
-
-```bash
 cp .env.example .env
 ```
 
-Then open `web/.env` and fill in your Supabase project's URL and anon key
+Open `web/.env` and fill in your Supabase project's URL and anon key
 (dashboard → Project Settings → API). `.env` is gitignored — never commit
-real keys, though the anon key is meant to be public anyway (see
-`PLAN.md` §1).
+real keys, though the anon key is meant to be public anyway (it's exposed
+in the client bundle either way; Row Level Security is what actually gates
+access, not keeping this key secret).
 
-**Run it**
-
-```bash
-npm run dev
-```
-
-Then open the printed `localhost` URL in a browser.
-
-**Check the code**
-
-Type-check without building:
+**Run and check**
 
 ```bash
-npx tsc --noEmit
-```
-
-Static analysis (unused vars, hook rule violations, etc.):
-
-```bash
-npm run lint
-```
-
-Run unit tests (`elo.ts`, the pure Elo algorithm, and `stats.ts`, the
-derived stats behind head-to-head records, streaks, rivals, personal bests,
-and recaps):
-
-```bash
-npm run test
-```
-
-Production build, outputs to `web/dist/`:
-
-```bash
-npm run build
-```
-
-Serve that production build locally — different from `npm run dev`'s
-dev-mode server; catches anything that only breaks in the built output,
-e.g. the `/MarioKartELO/` base path:
-
-```bash
-npm run preview
+npm run dev        # dev server, then open the printed localhost URL
+npx tsc --noEmit    # type-check without building
+npm run lint        # static analysis (unused vars, hook rule violations, etc.)
+npm run test        # unit tests for elo.ts and stats.ts
+npm run build        # production build -> web/dist/
+npm run preview     # serve that build locally (catches base-path issues npm run dev won't)
 ```
 
 **Check it in the browser** (manual — the commands above only catch what
 compiles/lints cleanly, not whether it actually looks/works right)
 
-1. `npm run dev`, open the printed `localhost` URL.
-2. Click through all the nav links (currently: Leaderboard `/`, Analytics
-   `/analytics`, Head to Head `/head-to-head`, Submit GP `/submit`) — each
-   should load and highlight the active tab. At phone width the tabs use
-   short labels (Table / Form / H2H / Submit); check all four still fit
-   on one line.
-3. Tap a racer's name on the Leaderboard — it should open their profile at
-   `/player/<id>` with a rating chart, streaks, rival, and their record
-   against everyone else. The rival's name and each opponent row should
-   link onward (to that profile, and to the matchup on Head to Head).
-4. On Head to Head, pick two racers. The picks are stored in the URL
-   (`/head-to-head?a=<id>&b=<id>`), so reloading the page should keep the
-   matchup and the link should work when pasted somewhere else. The swap
-   button should reverse the matchup, and the net Elo should flip sign.
-5. Submit a throwaway GP (see below) and check the Race recap panel that
-   appears under the form: finishing order, each racer's rating change,
-   any DEBUT/PEAK/BEST GP badges, and a line naming who gained and lost
-   the most. Then press "Share result card" — on a phone this opens the OS
-   share sheet, on a desktop browser it downloads a PNG. Open the PNG and
-   confirm nothing is clipped, especially with the longest name in your
-   roster and with a full 12-racer field. Void the GP afterward; the recap
-   should disappear with it.
-6. Open the browser DevTools console (F12) and confirm there are no red
-   errors — Vite's HMR connect messages and React's DevTools notice are
-   normal and fine to ignore.
+1. Click through every nav link (Leaderboard, Analytics, Head to Head,
+   Submit GP) and confirm the active tab highlights, including short labels
+   at phone width.
+2. Open a racer's profile from the Leaderboard — rating chart, streaks,
+   rival, and record vs. everyone should load, and every name should link
+   onward correctly.
+3. On Head to Head, pick two racers, reload the page (the picks live in the
+   URL) and confirm the matchup persists; try the swap button too.
+4. Submit a throwaway GP and check the recap panel (finishing order, rating
+   changes, badges, biggest gain/loss) and the "Share result card" PNG,
+   especially with your longest name and a full 12-racer field. Then void
+   the GP — the recap should disappear with it.
+5. Check the DevTools console for errors (Vite/React dev notices are fine).
 
-Supabase-specific checks (need the SQL setup below run first) are in
-**Verifying Everything Works** further down.
+Supabase-specific checks are in **Verifying Everything Works** below, after
+the SQL setup.
 
 ## Supabase Setup
 
-This is the one-time SQL setup for the Supabase project, matching the
-design in `PLAN.md`. The actual SQL lives in the repo, not here:
+One-time SQL setup. Run in the Supabase dashboard's SQL Editor:
 
 1. **`supabase/migrations/0001_init.sql`** — run once on a **fresh**
-   Supabase project, in the dashboard's SQL Editor. Creates all four tables,
-   the `player_stats` view, enables Row Level Security with public-read-only
-   policies, creates the password-gated functions (`submit_gp`,
-   `void_last_gp`, `add_player`) that are the only way to write data, and
-   adds `players` to the `supabase_realtime` publication so the Leaderboard
-   page's live subscription actually receives updates.
+   project. Creates the four tables, the `player_stats` view, RLS with
+   public-read-only policies, the password-gated write functions
+   (`submit_gp`, `void_last_gp`, `add_player`), and adds `players` to the
+   realtime publication for the Leaderboard's live updates.
 
-   Already have a database from an earlier version of this file? The
-   `create table` statements will error on a table that already exists —
-   skip those and paste just the `create extension`, the three
-   `create or replace function` blocks, and the `grant execute` lines. Safe
-   to run more than once.
-2. **`supabase/reset_ratings.sql`** — *not* part of setup, and destructive:
-   it deletes every recorded grand prix and puts all characters back to a
-   clean rating, keeping the roster. Run it when the rating settings change
-   (`STARTING_ELO` / `DEFAULT_K` / `RATING_SCALE` in `web/src/lib/elo.ts`)
-   and the old history isn't worth keeping — results rated under the old
-   settings would otherwise sit in the same table on a different scale. It
-   also adds the `elo >= 0` floor to a database created before that existed.
-   There is no undo.
-3. **`supabase/set_password.sql`** — run separately, after step 1. Open
-   the file, replace `REPLACE_WITH_YOUR_PASSWORD` with your actual chosen
-   password *in the SQL Editor only* (never commit that
-   edit — the file in the repo should always keep the placeholder), then
-   run it. This is
-   also how you change the password later: re-run it with a new value.
+   Upgrading an older database? The `create table` statements will error
+   on tables that already exist — just re-run the `create extension`, the
+   `create or replace function` blocks, and the `grant execute` lines
+   (safe to run more than once).
+2. **`supabase/reset_ratings.sql`** — *destructive*, not part of setup: wipes
+   every recorded GP and resets everyone's rating, keeping the roster. Run
+   only when changing `STARTING_ELO` / `DEFAULT_K` / `RATING_SCALE` in
+   `web/src/lib/elo.ts` and the old history isn't worth keeping. No undo.
+3. **`supabase/set_password.sql`** — run after step 1, and again any time
+   you want to change the password. Replace `REPLACE_WITH_YOUR_PASSWORD`
+   with your real password *in the SQL Editor only* — never commit that
+   edit.
 
 ## Deployment (GitHub Pages)
 
-`.github/workflows/deploy.yml` builds `web/` and publishes it to GitHub
-Pages on every push to `main` (or manually from the Actions tab). Three
-one-time setup steps before the first deploy works:
+`.github/workflows/deploy.yml` builds `web/` and publishes to GitHub Pages
+on every push to `main`. One-time setup:
 
-1. **Turn on Pages**: repo Settings → Pages → Build and deployment →
-   Source → **GitHub Actions** (not "Deploy from a branch" — that skips
-   the build step, and the `.tsx` source can't be served directly).
-2. **Add the two secrets**: repo Settings → Secrets and variables →
-   Actions → New repository secret. Add `VITE_SUPABASE_URL` and
-   `VITE_SUPABASE_ANON_KEY` with the same values as your local
-   `web/.env`. Vite bakes `VITE_*` vars into the bundle at build time, so
-   without these the deployed site can't reach Supabase.
-3. **Merge to `main`**: the workflow only triggers on `main`, so work on
-   other branches won't deploy until merged.
+1. Repo Settings → Pages → Build and deployment → Source → **GitHub
+   Actions** (not "Deploy from a branch", which skips the build step).
+2. Repo Settings → Secrets and variables → Actions → add
+   `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`, matching your local
+   `web/.env` (Vite bakes `VITE_*` vars in at build time).
+3. Merge to `main` — the workflow only triggers there.
 
-The live site will be at `https://<username>.github.io/<repo-name>/` —
-this must match the `base` in `web/vite.config.ts` (currently
-`/MarioKartELO/`) or every asset 404s.
-
-The workflow runs `tsc --noEmit`, `npm run lint`, and `npm run test`
-before building, so a type error, lint error, or failing test blocks the
-deploy rather than shipping broken output.
+The live site must match the `base` in `web/vite.config.ts` (currently
+`/MarioKartELO/`) or every asset 404s. The workflow runs `tsc --noEmit`,
+`npm run lint`, and `npm run test` before building, so failures there block
+the deploy.
 
 ## Verifying Everything Works
 
-Supabase-specific checks — see **Quick Commands** above for the web app
-and git checks. This section grows as more gets built. Do each of these
-in the dashboard's SQL Editor, after running the setup above (exact
-queries aren't repeated here — write them ad hoc, they're one-liners
-against `site_secret`/`players`):
+After running the Supabase setup above, in the dashboard's SQL Editor
+(exact queries are one-liners against `site_secret`/`players`, write them
+ad hoc):
 
-- Confirm the password is actually hashed, not stored as plaintext:
-  select `password_hash` from `site_secret` and check it starts with
-  `$2a$` or `$2b$` (bcrypt), never your literal password.
-- Confirm a wrong password is rejected: call `add_player` with a bogus
-  password — it should raise `invalid password` and add nothing.
-- Confirm the right password works: call `add_player` with the real
-  password — it should return a UUID and add a row to `players`. Delete
-  that test row afterward so it doesn't linger in your roster.
-- In the Table Editor: `players`, `grand_prix`, `gp_results`,
-  `site_secret` should all show a green "RLS enabled" badge (`player_stats`
-  will say "Unrestricted" instead — expected, since RLS only applies to
-  tables, not views).
-- Confirm voiding works: submit a throwaway GP from the Submit GP page,
-  note the ratings it produced, then use the "Void this grand prix" button
-  below the form. The affected players' ratings/GP counts should roll back
-  to exactly what they were before, and the GP should disappear from
-  `grand_prix`.
-- Confirm the rating floor holds: ratings can't go below 0. `computeGpElo`
-  clamps there, and `players_elo_non_negative` on `players` is the backstop
-  if anything ever tries to write past it. To see the constraint bite, run
-  `update players set elo = -1;` in the SQL Editor — it should fail with a
-  check-constraint violation and change nothing.
-- Confirm the stale-rating guard works: open Submit GP in two browser tabs,
-  submit a GP in one, then try submitting a *different* GP in the other tab
-  (which still has the old ratings loaded) — it should fail with a message
-  to refresh, not silently overwrite the first GP's rating changes.
+- **Password is hashed**: `password_hash` in `site_secret` starts with
+  `$2a$`/`$2b$` (bcrypt), never plaintext.
+- **Auth actually gates writes**: a bogus password on `add_player` raises
+  `invalid password` and adds nothing; the real password returns a UUID and
+  a new `players` row (delete that test row after).
+- **RLS is on**: `players`, `grand_prix`, `gp_results`, `site_secret` all
+  show "RLS enabled" in the Table Editor (`player_stats` correctly shows
+  "Unrestricted" — it's a view, not a table).
+- **Voiding rolls back cleanly**: submit a throwaway GP, note the rating
+  changes, then use "Void this grand prix" — ratings/GP counts should
+  revert exactly and the GP should disappear from `grand_prix`.
+- **Rating floor holds**: `update players set elo = -1;` should fail on the
+  `players_elo_non_negative` check constraint.
+- **Stale-rating guard works**: open Submit GP in two tabs, submit in one,
+  then submit a different GP from the other (stale) tab — it should fail
+  asking you to refresh, not silently overwrite the first GP.
 
 ## Notes
 
-- `players`, `grand_prix`, and `gp_results` are readable by anyone (that's
-  what powers the public Leaderboard and Analytics pages) but not writable
-  by anyone directly — the only way rows get created is through
-  `submit_gp` and `add_player`, and both refuse to do anything unless the
-  correct password is passed in.
-- `site_secret` itself is never selectable by `anon`, even though the
-  functions above can read it internally — see `PLAN.md` §4 for why.
-- This is a shared-password model, not real per-person authentication. See
-  `PLAN.md` §4 for the tradeoff that comes with that choice.
+- `players`, `grand_prix`, and `gp_results` are publicly readable (that's
+  what powers the Leaderboard and Analytics pages) but only writable
+  through `submit_gp` and `add_player`, both password-gated.
+- `site_secret` is never selectable by `anon` — it gets no RLS policy at
+  all, so no client can read it directly. The write functions can still
+  check the password because they're `security definer`, running as the
+  table owner rather than as the caller.
+- This is a shared-password model, not per-person auth: anyone with the
+  password can submit or void a GP as if they were anyone, and there's no
+  per-person audit trail or way to revoke just one person's access.
 - Head-to-head records, streaks, rivals, personal bests, and recaps are all
-  derived in the browser from the rows `gp_results` already stores (points
-  plus the rating each racer carried into and out of every GP), in
-  `web/src/lib/stats.ts`. None of them needed a schema change, so there is
-  no migration to run for any of it — an existing database already has
-  everything they read.
+  derived in the browser from `gp_results` (`web/src/lib/stats.ts`) — no
+  schema change or migration needed for any of it.

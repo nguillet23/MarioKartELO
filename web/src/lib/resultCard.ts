@@ -13,16 +13,16 @@ const HEIGHT = 1350
 
 // Mirrors the palette in index.css. Canvas takes plain colors, not CSS
 // custom properties, so these have to be repeated here.
-const ASPHALT = '#14121f'
-const PIT = '#1c1930'
-const LINE = '#322c4a'
-const CHALK = '#f2effc'
-const HAZE = '#948cb4'
+const ASPHALT = '#0a1428'
+const PIT = '#0f1d3a'
+const LINE = '#28406e'
+const CHALK = '#f4f7fc'
+const HAZE = '#90a0c9'
 const GOLD = '#ffc42b'
 const BOOST = '#35d07f'
 const SPIN = '#ff5a47'
 const SILVER = '#b9c3d4'
-const BRONZE = '#c17a4d'
+const BRONZE = '#b3915c'
 
 /** The podium's medal color for a rank, or null off the podium. */
 function tierColor(rank: number): string | null {

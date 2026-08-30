@@ -17,8 +17,8 @@ import { RACER_COLORS } from '../lib/palette'
 import type { GrandPrix } from '../lib/history'
 import PageHeader from '../components/PageHeader'
 
-const AXIS_COLOR = '#948cb4'
-const GRID_COLOR = '#322c4a'
+const AXIS_COLOR = '#90a0c9'
+const GRID_COLOR = '#28406e'
 
 interface PlayerStatsRow {
   id: string
@@ -67,12 +67,13 @@ function buildChartData(history: GrandPrix[], knownPlayerIds: Set<string>) {
       racedThisGp.add(entry.playerId)
       started.add(entry.playerId)
     }
-    // Zero-fill everyone else who's already debuted so the line has no gaps
-    // to bridge — a flat drop to 0 rather than connectNulls interpolating a
-    // slope across GPs where nothing happened to that player's rating.
+    // Carry everyone else who's already debuted forward at their last rating
+    // so the line has no gaps to bridge — a flat hold rather than dropping to
+    // 0 (which would falsely show a rating crash) or connectNulls
+    // interpolating a slope across GPs where nothing happened to them.
     for (const playerId of started) {
       if (racedThisGp.has(playerId)) continue
-      eloRow[playerId] = 0
+      eloRow[playerId] = latestElo.get(playerId)!
       eloRow[`${playerId}${RACED_SUFFIX}`] = 0
     }
     eloRows.push(eloRow)
@@ -123,7 +124,7 @@ function ChartTooltip({ active, payload, label }: TooltipProps<number, string>) 
   return (
     <div
       style={{
-        background: '#1c1930',
+        background: '#0f1d3a',
         border: `1px solid ${GRID_COLOR}`,
         borderRadius: '0.5rem',
         fontSize: 13,
@@ -184,6 +185,18 @@ export default function Analytics() {
   const [statsWindow, setStatsWindow] = useState<StatsWindow>(WINDOW_OPTIONS[0].window)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Players toggled off by clicking their legend entry — their line hides
+  // from both the Rating and Position charts until clicked again.
+  const [hiddenPlayerIds, setHiddenPlayerIds] = useState<Set<string>>(new Set())
+
+  function toggleHidden(playerId: string) {
+    setHiddenPlayerIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(playerId)) next.delete(playerId)
+      else next.add(playerId)
+      return next
+    })
+  }
 
   async function loadData() {
     const [statsRes, playersRes] = await Promise.all([
@@ -251,7 +264,7 @@ export default function Analytics() {
     }`
 
   return (
-    <div className="mx-auto max-w-4xl px-5 py-8">
+    <div className="mx-auto max-w-7xl px-5 py-8">
       <PageHeader
         title="Form guide"
         subtitle="How every rating has moved, grand prix by grand prix."
@@ -344,7 +357,25 @@ export default function Analytics() {
                   domain={mode === 'rank' ? [1, maxRank] : ['auto', 'auto']}
                 />
                 <Tooltip content={<ChartTooltip />} />
-                <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+                <Legend
+                  wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+                  iconSize={9}
+                  onClick={(entry) => toggleHidden(String(entry.dataKey))}
+                  formatter={(value, entry) => {
+                    const hidden = hiddenPlayerIds.has(String(entry.dataKey))
+                    return (
+                      <span
+                        style={{
+                          cursor: 'pointer',
+                          color: hidden ? AXIS_COLOR : undefined,
+                          textDecoration: hidden ? 'line-through' : 'none',
+                        }}
+                      >
+                        {value}
+                      </span>
+                    )
+                  }}
+                />
                 {players.map((player, index) => (
                   // dataKey is the player id, not the name: Recharts reads a
                   // string dataKey as an object path, so a name containing a
@@ -358,6 +389,7 @@ export default function Analytics() {
                     stroke={RACER_COLORS[index % RACER_COLORS.length]}
                     strokeWidth={2}
                     dot={false}
+                    hide={hiddenPlayerIds.has(player.id)}
                   />
                 ))}
               </LineChart>
