@@ -8,7 +8,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-  type TooltipProps,
+  type TooltipContentProps,
 } from 'recharts'
 import { supabase } from '../lib/supabaseClient'
 import { loadHistory } from '../lib/loadHistory'
@@ -111,7 +111,7 @@ function windowedPointsByPlayer(history: GrandPrix[]): Map<string, { points: num
  * who sat out a GP shows a flat 0 in the line so it has no gap, but the
  * tooltip should stay silent about them rather than claim their rating hit 0.
  */
-function ChartTooltip({ active, payload, label }: TooltipProps<number, string>) {
+function ChartTooltip({ active, payload, label }: TooltipContentProps) {
   if (!active || !payload?.length) return null
 
   const row = payload[0]?.payload as ChartRow | undefined
@@ -356,7 +356,7 @@ export default function Analytics() {
                   reversed={mode === 'rank'}
                   domain={mode === 'rank' ? [1, maxRank] : ['auto', 'auto']}
                 />
-                <Tooltip content={<ChartTooltip />} />
+                <Tooltip content={ChartTooltip} />
                 <Legend
                   wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
                   iconSize={9}
