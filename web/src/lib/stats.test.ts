@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { computeGpElo, STARTING_ELO } from './elo'
+import { computeGpElo, DEFAULT_RACES, STARTING_ELO } from './elo'
 import { groupIntoGrandPrix, type GrandPrix } from './history'
 import {
+  ACHIEVEMENT_POINTS_PER_RACE,
   achievementsFor,
   attendance,
   buildRecap,
   buildRecordsBook,
+  clutchThreshold,
   consistencyRankings,
   headToHead,
   opponentRecords,
@@ -23,6 +25,8 @@ import {
 interface GpSpec {
   /** [playerId, points] — everyone starts at STARTING_ELO, as the schema does. */
   field: [string, number][]
+  /** Races the GP's points were summed over. Defaults to 4, the app's original fixed length. */
+  races?: number
 }
 
 /**
@@ -51,7 +55,7 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
       rating: ratings.get(playerId) ?? STARTING_ELO,
       gpCount: gpCounts.get(playerId) ?? 0,
     }))
-    const updates = computeGpElo(participants)
+    const updates = computeGpElo(participants, { races: spec.races })
 
     for (const update of updates) {
       ratings.set(update.playerId, update.eloAfter)
@@ -66,7 +70,10 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
       elo_after: updates[i].eloAfter,
       elo_delta: updates[i].eloDelta,
       // Ascending, one day apart, so the ordering is unambiguous.
-      grand_prix: { played_at: `2026-01-${String(index + 1).padStart(2, '0')}T20:00:00Z` },
+      grand_prix: {
+        played_at: `2026-01-${String(index + 1).padStart(2, '0')}T20:00:00Z`,
+        races: spec.races ?? DEFAULT_RACES,
+      },
       players: { name: p.playerId.toUpperCase() },
     }))
   })
@@ -105,7 +112,7 @@ function makeHistoryAt(specs: { field: [string, number][]; playedAt: string }[])
       elo_before: updates[i].eloBefore,
       elo_after: updates[i].eloAfter,
       elo_delta: updates[i].eloDelta,
-      grand_prix: { played_at: spec.playedAt },
+      grand_prix: { played_at: spec.playedAt, races: DEFAULT_RACES },
       players: { name: p.playerId.toUpperCase() },
     }))
   })
@@ -231,6 +238,26 @@ describe('headToHead', () => {
     expect(record.ties).toBe(1)
     expect(record.wins).toBe(0)
     expect(record.losses).toBe(0)
+  })
+})
+
+describe('opponentRecords across GP lengths', () => {
+  it("sums each meeting's swing to the player's real rating change, whatever the GP length", () => {
+    // Every rating change in the fixture came from computeGpElo with that GP's
+    // own race count, so the pairwise reconstruction has to use the same one.
+    const history = makeHistory([
+      { field: [['a', 60], ['b', 30], ['c', 20], ['d', 4]] },
+      { races: 10, field: [['a', 140], ['b', 60], ['c', 90], ['d', 30]] },
+      { races: 20, field: [['a', 100], ['b', 250], ['c', 180], ['d', 60]] },
+    ])
+    const records = opponentRecords(history, 'a')
+    const netElo = records.reduce((sum, r) => sum + r.netElo, 0)
+    const realDelta = history.reduce(
+      (sum, gp) => sum + (gp.entries.find((e) => e.playerId === 'a')?.eloDelta ?? 0),
+      0,
+    )
+    // Rounded once per opponent, so allow one point of drift per opponent.
+    expect(Math.abs(netElo - realDelta)).toBeLessThanOrEqual(records.length)
   })
 })
 
@@ -734,6 +761,31 @@ describe('achievementsFor', () => {
       history[0].playedAt,
     )
     expect(achievementsFor(history, 'b').find((a) => a.id === 'clutch')?.unlockedAt).toBeNull()
+  })
+
+  it('keeps the clutch line at exactly 55 points for a default 4-race GP', () => {
+    expect(clutchThreshold(4)).toBe(55)
+    const clutch = (points: number) =>
+      achievementsFor(
+        makeHistory([{ field: [['a', points], ['b', 10], ['w', 8], ['x', 4]] }]),
+        'a',
+      ).find((a) => a.id === 'clutch')?.unlockedAt
+    expect(clutch(55)).not.toBeNull()
+    expect(clutch(54)).toBeNull()
+  })
+
+  it('scales the clutch line with the GP length', () => {
+    expect(clutchThreshold(10)).toBe(ACHIEVEMENT_POINTS_PER_RACE * 10)
+    const clutch = (races: number, points: number) =>
+      achievementsFor(
+        makeHistory([{ races, field: [['a', points], ['b', 10], ['w', 8], ['x', 4]] }]),
+        'a',
+      ).find((a) => a.id === 'clutch')?.unlockedAt
+    // 55 points was a near-sweep of 4 races; over 10 it's barely over a third of the available total...
+    expect(clutch(10, 55)).toBeNull()
+    // ...while the same share of a 10-race GP (137.5, so 138 whole points) does unlock it.
+    expect(clutch(10, 138)).not.toBeNull()
+    expect(clutch(10, 137)).toBeNull()
   })
 
   it('unlocks giant slayer only when beating the roster-wide top-rated player', () => {

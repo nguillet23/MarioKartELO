@@ -66,11 +66,19 @@ One-time SQL setup. Run in the Supabase dashboard's SQL Editor:
    on tables that already exist — just re-run the `create extension`, the
    `create or replace function` blocks, and the `grant execute` lines
    (safe to run more than once).
-2. **`supabase/reset_ratings.sql`** — *destructive*, not part of setup: wipes
+2. **`supabase/migrations/0002_races_per_gp.sql`** — run after step 1, on
+   fresh and existing databases alike (safe to run more than once). Adds
+   `grand_prix.races` (backfilled to 4 for every GP already on record),
+   swaps the hardcoded `points between 4 and 60` check for a looser one, and
+   replaces `submit_gp` with a version that takes a `races` argument and
+   range-checks each score against it. **Run it before deploying the web app**
+   that reads `races` — until the column exists, every page that loads
+   history errors out.
+3. **`supabase/reset_ratings.sql`** — *destructive*, not part of setup: wipes
    every recorded GP and resets everyone's rating, keeping the roster. Run
    only when changing `STARTING_ELO` / `DEFAULT_K` / `RATING_SCALE` in
    `web/src/lib/elo.ts` and the old history isn't worth keeping. No undo.
-3. **`supabase/set_password.sql`** — run after step 1, and again any time
+4. **`supabase/set_password.sql`** — run after step 1, and again any time
    you want to change the password. Replace `REPLACE_WITH_YOUR_PASSWORD`
    with your real password *in the SQL Editor only* — never commit that
    edit.

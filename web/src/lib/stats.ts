@@ -6,7 +6,7 @@
 // a new table: `gp_results` already stores each player's points and the exact
 // rating they carried into and out of every GP.
 
-import { expectedScore, pairwiseEloExchange, placementBonuses } from './elo'
+import { DEFAULT_RACES, expectedScore, pairwiseEloExchange, placementBonuses } from './elo'
 import { rosterFromHistory } from './history'
 import type { GrandPrix, GpEntry } from './history'
 
@@ -128,6 +128,7 @@ export function opponentRecords(history: GrandPrix[], playerId: string): Opponen
         { points: me.points, gpCount, placementBonus: myBonus },
         { points: other.points },
         gp.entries.length,
+        { races: gp.races },
       )
 
       record.opponentName = other.playerName
@@ -799,8 +800,20 @@ export function windowGpsFor(
   return gps.filter((gp) => new Date(gp.playedAt).getTime() >= cutoff)
 }
 
-/** Points total that earns the "Clutch" achievement — a near-sweep of every race. */
-export const ACHIEVEMENT_POINTS_THRESHOLD = 55
+/**
+ * Average points per race that earns the "Clutch" achievement — a near-sweep of
+ * every race. 13.75 a race is 55 points over the default 4 races (55 of a
+ * possible 60), and scales with the GP's length so a short or long GP judges it
+ * the same way. Expressed per race rather than as a 0.9166… fraction of the max
+ * because 13.75 is exact in binary floating point, so 55 points over 4 races
+ * lands exactly on the line instead of a rounding error either side of it.
+ */
+export const ACHIEVEMENT_POINTS_PER_RACE = 13.75
+
+/** The points total that earns "Clutch" in a GP of the given length. */
+export function clutchThreshold(races: number): number {
+  return ACHIEVEMENT_POINTS_PER_RACE * races
+}
 /** GP count that earns the "Regular" achievement. */
 export const ACHIEVEMENT_GP_MILESTONE = 10
 
@@ -841,7 +854,7 @@ export function achievementsFor(history: GrandPrix[], playerId: string): Achieve
     const me = entryFor(gp, playerId)
     if (me) {
       if (!firstWinAt && me.rank === 1) firstWinAt = gp.playedAt
-      if (!bigScoreAt && me.points >= ACHIEVEMENT_POINTS_THRESHOLD) bigScoreAt = gp.playedAt
+      if (!bigScoreAt && me.points >= clutchThreshold(gp.races)) bigScoreAt = gp.playedAt
       if (!giantSlayerAt && topId && topId !== playerId) {
         const top = entryFor(gp, topId)
         if (top && me.points > top.points) giantSlayerAt = gp.playedAt
@@ -887,7 +900,7 @@ export function achievementsFor(history: GrandPrix[], playerId: string): Achieve
     {
       id: 'clutch',
       label: 'Clutch',
-      description: `Score ${ACHIEVEMENT_POINTS_THRESHOLD}+ points in a single grand prix.`,
+      description: `Score ${clutchThreshold(DEFAULT_RACES)}+ points in a 4-race grand prix, or the same share of the available points in a longer or shorter one.`,
       unlockedAt: bigScoreAt,
     },
     {

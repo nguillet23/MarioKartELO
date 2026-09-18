@@ -3,9 +3,15 @@ import { supabase } from '../lib/supabaseClient'
 import {
   computeGpElo,
   DEFAULT_K,
+  DEFAULT_RACES,
+  isValidRaceCount,
   MARGIN_WEIGHT,
-  MAX_GP_POINTS,
-  MIN_GP_POINTS,
+  MAX_POINTS_PER_RACE,
+  MAX_RACES,
+  maxGpPoints,
+  MIN_POINTS_PER_RACE,
+  MIN_RACES,
+  minGpPoints,
   type GpParticipant,
 } from '../lib/elo'
 import { formatGpDate, type GrandPrix } from '../lib/history'
@@ -32,6 +38,11 @@ interface Entry {
   key: string
   playerId: string
   points: string
+}
+
+interface LastGp {
+  races: number
+  entries: LastGpEntry[]
 }
 
 interface LastGpEntry {
@@ -63,6 +74,12 @@ export default function SubmitGP() {
 
   const [password, setPassword] = useState('')
   const [entries, setEntries] = useState<Entry[]>(makeDefaultEntries)
+  /**
+   * Kept as the raw string so the field can be cleared and retyped without
+   * snapping back mid-edit. Deliberately not reset after a submit — a group
+   * that just played a 10-race night is likely to log the next one the same way.
+   */
+  const [racesInput, setRacesInput] = useState(String(DEFAULT_RACES))
   /** Blank means "just happened" — submit_gp defaults to now() when this is omitted. Only set to backdate a forgotten night. */
   const [playedAt, setPlayedAt] = useState('')
 
@@ -71,7 +88,7 @@ export default function SubmitGP() {
   const [success, setSuccess] = useState(false)
 
   const [recap, setRecap] = useState<Recap | null>(null)
-  const [lastGp, setLastGp] = useState<LastGpEntry[] | null>(null)
+  const [lastGp, setLastGp] = useState<LastGp | null>(null)
   const [confirmingVoid, setConfirmingVoid] = useState(false)
   const [voiding, setVoiding] = useState(false)
   const [voidError, setVoidError] = useState<string | null>(null)
@@ -101,7 +118,7 @@ export default function SubmitGP() {
   async function loadLastGp() {
     const { data, error: fetchError } = await supabase
       .from('grand_prix')
-      .select('id, gp_results(points, elo_delta, players(name))')
+      .select('id, races, gp_results(points, elo_delta, players(name))')
       .order('played_at', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -112,17 +129,19 @@ export default function SubmitGP() {
     }
 
     const raw = data as unknown as {
+      races: number
       gp_results: { points: number; elo_delta: number; players: { name: string } | null }[]
     }
-    setLastGp(
-      (raw.gp_results ?? [])
+    setLastGp({
+      races: raw.races,
+      entries: (raw.gp_results ?? [])
         .map((r) => ({
           name: r.players?.name ?? 'Unknown',
           points: r.points,
           eloDelta: r.elo_delta,
         }))
         .sort((a, b) => b.points - a.points),
-    )
+    })
   }
 
   useEffect(() => {
@@ -158,6 +177,25 @@ export default function SubmitGP() {
     )
   }
 
+  const races = Number(racesInput)
+  const racesValid = racesInput.trim() !== '' && isValidRaceCount(races)
+  // What the points fields' bounds and the subtitle are drawn against. Falls
+  // back to the default while the races field is blank or mid-edit, so they
+  // never read "NaN" — submitting is what actually rejects an invalid count.
+  const effectiveRaces = racesValid ? races : DEFAULT_RACES
+  const minPoints = minGpPoints(effectiveRaces)
+  const maxPoints = maxGpPoints(effectiveRaces)
+
+  /** Snaps a typed race count into range when the field loses focus. */
+  function clampRacesInput() {
+    const typed = Math.round(Number(racesInput))
+    if (racesInput.trim() === '' || Number.isNaN(typed)) {
+      setRacesInput(String(DEFAULT_RACES))
+      return
+    }
+    setRacesInput(String(Math.min(Math.max(typed, MIN_RACES), MAX_RACES)))
+  }
+
   const usedPlayerIds = useMemo(
     () => new Set(entries.map((e) => e.playerId).filter((id) => id !== UNSELECTED)),
     [entries],
@@ -168,6 +206,7 @@ export default function SubmitGP() {
   // gets saved if someone else submits a GP in the meantime. handleSubmit
   // re-reads ratings right before the real computation for that reason.
   const preview = useMemo(() => {
+    if (!racesValid) return null
     if (entries.some((e) => e.playerId === UNSELECTED)) return null
 
     const ids = entries.map((e) => e.playerId)
@@ -176,18 +215,18 @@ export default function SubmitGP() {
     const participants: GpParticipant[] = []
     for (const entry of entries) {
       const points = Number(entry.points)
-      if (!Number.isInteger(points) || points < MIN_GP_POINTS || points > MAX_GP_POINTS) return null
+      if (!Number.isInteger(points) || points < minPoints || points > maxPoints) return null
       const player = roster.find((p) => p.id === entry.playerId)
       if (!player) return null
       participants.push({ playerId: entry.playerId, rating: player.elo, points, gpCount: player.gp_count })
     }
 
     try {
-      return new Map(computeGpElo(participants).map((u) => [u.playerId, u.eloDelta]))
+      return new Map(computeGpElo(participants, { races }).map((u) => [u.playerId, u.eloDelta]))
     } catch {
       return null
     }
-  }, [entries, roster])
+  }, [entries, roster, racesValid, races, minPoints, maxPoints])
 
   function updateEntry(key: string, patch: Partial<Entry>) {
     setEntries((prev) => prev.map((e) => (e.key === key ? { ...e, ...patch } : e)))
@@ -211,6 +250,11 @@ export default function SubmitGP() {
       return
     }
 
+    if (!racesValid) {
+      setError(`Races must be a whole number from ${MIN_RACES} to ${MAX_RACES}.`)
+      return
+    }
+
     const parsed: { playerId: string; points: number }[] = []
     for (const entry of entries) {
       if (entry.playerId === UNSELECTED) {
@@ -218,9 +262,9 @@ export default function SubmitGP() {
         return
       }
       const points = Number(entry.points)
-      if (!Number.isInteger(points) || points < MIN_GP_POINTS || points > MAX_GP_POINTS) {
+      if (!Number.isInteger(points) || points < minPoints || points > maxPoints) {
         setError(
-          `Every slot needs a whole-number score between ${MIN_GP_POINTS} and ${MAX_GP_POINTS}.`,
+          `Every slot needs a whole-number score between ${minPoints} and ${maxPoints} for a ${races}-race grand prix.`,
         )
         return
       }
@@ -268,7 +312,7 @@ export default function SubmitGP() {
         return { playerId, rating: player.elo, points, gpCount: player.gp_count }
       })
 
-      const updates = computeGpElo(participants)
+      const updates = computeGpElo(participants, { races })
       const results = updates.map((u) => ({
         player_id: u.playerId,
         points: pointsByPlayerId[u.playerId],
@@ -281,6 +325,7 @@ export default function SubmitGP() {
         password,
         results,
         played_at: playedAtIso,
+        races,
       })
       if (submitError) throw new Error(submitError.message)
 
@@ -337,7 +382,7 @@ export default function SubmitGP() {
     <div className="mx-auto max-w-2xl px-5 py-8">
       <PageHeader
         title="Submit GP"
-        subtitle="Each racer's total points across the four races. Ratings update the moment you submit."
+        subtitle={`Each racer's total points across all ${effectiveRaces} races. Ratings update the moment you submit.`}
       />
 
       {rosterError && (
@@ -347,6 +392,32 @@ export default function SubmitGP() {
       )}
 
       <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+        <div>
+          <label
+            className="block text-[10px] font-medium uppercase tracking-[0.2em] text-haze"
+            htmlFor="races"
+          >
+            Races in this grand prix
+          </label>
+          <input
+            id="races"
+            type="number"
+            inputMode="numeric"
+            min={MIN_RACES}
+            max={MAX_RACES}
+            step={1}
+            value={racesInput}
+            onChange={(e) => setRacesInput(e.target.value)}
+            onBlur={clampRacesInput}
+            className="field mt-2 w-28 text-center font-mono"
+          />
+          <p className="mt-1.5 text-xs text-haze">
+            {MIN_RACES} to {MAX_RACES}. Each race scores {MAX_POINTS_PER_RACE} for 1st down to{' '}
+            {MIN_POINTS_PER_RACE} for 12th, so each racer's total lands between {minPoints} and{' '}
+            {maxPoints}.
+          </p>
+        </div>
+
         <ol className="flex flex-col gap-2">
           {entries.map((entry, index) => {
             const availableRoster = roster.filter(
@@ -392,8 +463,8 @@ export default function SubmitGP() {
                 <input
                   type="number"
                   inputMode="numeric"
-                  min={MIN_GP_POINTS}
-                  max={MAX_GP_POINTS}
+                  min={minPoints}
+                  max={maxPoints}
                   value={entry.points}
                   onChange={(e) => updateEntry(entry.key, { points: e.target.value })}
                   placeholder="Pts"
@@ -520,8 +591,9 @@ export default function SubmitGP() {
           <p className="mt-4 text-sm text-haze">Nothing on record yet.</p>
         ) : (
           <>
-            <ol className="panel mt-4 divide-y divide-line">
-              {lastGp.map((r) => (
+            <p className="mt-4 font-mono text-xs text-haze">{lastGp.races} races</p>
+            <ol className="panel mt-2 divide-y divide-line">
+              {lastGp.entries.map((r) => (
                 <li key={r.name} className="flex items-center justify-between px-4 py-2.5">
                   <span className="font-display text-sm font-bold text-chalk">{r.name}</span>
                   <span className="flex items-baseline gap-3 font-mono text-sm">

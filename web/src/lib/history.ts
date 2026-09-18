@@ -6,11 +6,14 @@
 // them need a schema change, just one read and the pure functions in
 // `stats.ts`.
 //
-// Deliberately imports nothing: the read itself lives in `loadHistory.ts`,
-// because `supabaseClient` throws at module load when its env vars are unset.
-// Importing it here would make every pure function below unusable without
-// database credentials — which is what broke the unit tests in CI, where the
-// test step runs before the build step that has the secrets.
+// Deliberately imports nothing that touches the database: the read itself
+// lives in `loadHistory.ts`, because `supabaseClient` throws at module load
+// when its env vars are unset. Importing it here would make every pure
+// function below unusable without database credentials — which is what broke
+// the unit tests in CI, where the test step runs before the build step that
+// has the secrets. (`elo.ts` is pure, so importing from it is fine.)
+
+import { DEFAULT_RACES } from './elo'
 
 export interface GpEntry {
   playerId: string
@@ -26,6 +29,8 @@ export interface GpEntry {
 export interface GrandPrix {
   id: string
   playedAt: string
+  /** How many races every entry's `points` was summed over. */
+  races: number
   /** Highest points first. */
   entries: GpEntry[]
 }
@@ -38,7 +43,7 @@ export interface GpResultRow {
   elo_before: number
   elo_after: number
   elo_delta: number
-  grand_prix: { played_at: string } | null
+  grand_prix: { played_at: string; races: number } | null
   players: { name: string } | null
 }
 
@@ -56,7 +61,12 @@ export function groupIntoGrandPrix(rows: GpResultRow[]): GrandPrix[] {
     const playedAt = row.grand_prix?.played_at
     if (!playedAt) continue
 
-    const gp = byGp.get(row.grand_prix_id) ?? { id: row.grand_prix_id, playedAt, entries: [] }
+    const gp = byGp.get(row.grand_prix_id) ?? {
+      id: row.grand_prix_id,
+      playedAt,
+      races: row.grand_prix?.races ?? DEFAULT_RACES,
+      entries: [],
+    }
     gp.entries.push({
       playerId: row.player_id,
       playerName: row.players?.name ?? 'Unknown',
