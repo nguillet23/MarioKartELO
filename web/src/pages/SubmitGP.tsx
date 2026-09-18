@@ -730,7 +730,8 @@ export default function SubmitGP() {
                         />
                         <span className="text-haze">{formatGpDate(gp.playedAt)}</span>
                         <span className="min-w-0 flex-1 truncate text-chalk">
-                          {gp.entries[0].playerName} won with {gp.entries[0].points}
+                          {gp.entries[0].playerName} won with {gp.entries[0].points} over {gp.races}{' '}
+                          races
                         </span>
                       </label>
                     </li>

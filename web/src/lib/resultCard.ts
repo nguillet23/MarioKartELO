@@ -317,7 +317,13 @@ export async function drawResultCard(canvas: HTMLCanvasElement, recap: Recap): P
 
   ctx.fillStyle = LINE
   ctx.font = `500 22px ${SANS}`
-  ctx.fillText(`${rows.length} racers · rated on margin of victory`, margin, HEIGHT - 68)
+  // The race count is what gives the points column its scale: 60 is a sweep
+  // of 4 races and a middling night over 10.
+  ctx.fillText(
+    `${rows.length} racers · ${recap.grandPrix.races} races · rated on margin of victory`,
+    margin,
+    HEIGHT - 68,
+  )
 }
 
 export type ShareOutcome = 'shared' | 'downloaded' | 'cancelled'

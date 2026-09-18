@@ -9,6 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { pointsPerRace } from '../lib/elo'
 import { formatGpDate, rosterFromHistory, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
 import {
@@ -143,12 +144,14 @@ export default function PlayerProfile() {
   )
   const windowedSummary = useMemo(() => {
     if (windowedGps.length === 0) return null
-    const points = windowedGps.map((gp) => entryFor(gp, playerId)!.points)
+    const totalPoints = windowedGps.reduce((sum, gp) => sum + entryFor(gp, playerId)!.points, 0)
+    const totalRaces = windowedGps.reduce((sum, gp) => sum + gp.races, 0)
     const eloChange = windowedGps.reduce((sum, gp) => sum + entryFor(gp, playerId)!.eloDelta, 0)
     return {
       gpCount: windowedGps.length,
-      totalPoints: points.reduce((sum, p) => sum + p, 0),
-      avgPoints: points.reduce((sum, p) => sum + p, 0) / points.length,
+      totalPoints,
+      // Per race raced, not per GP: GPs can differ in length.
+      pointsPerRace: pointsPerRace(totalPoints, totalRaces),
       eloChange,
     }
   }, [windowedGps, playerId])
@@ -247,16 +250,22 @@ export default function PlayerProfile() {
           tone={streaks.current > 0 ? 'text-boost' : 'text-haze'}
         />
         <Stat
-          label="Best GP"
-          value={`${bests.bestPoints}`}
-          hint={bests.bestPointsAt ? formatGpDate(bests.bestPointsAt) : undefined}
+          label="Best GP (pts/race)"
+          value={bests.bestPoints.toFixed(2)}
+          hint={`${bests.bestPointsTotal} pts over ${bests.bestPointsRaces} races${
+            bests.bestPointsAt ? ` · ${formatGpDate(bests.bestPointsAt)}` : ''
+          }`}
         />
-        <Stat label="Worst GP" value={`${bests.worstPoints}`} />
+        <Stat
+          label="Worst GP (pts/race)"
+          value={bests.worstPoints.toFixed(2)}
+          hint={`${bests.worstPointsTotal} pts over ${bests.worstPointsRaces} races`}
+        />
         {consistency && (
           <Stat
             label="Consistency"
-            value={consistency.stdDev.toFixed(1)}
-            hint={consistencyTag ?? 'Points std. dev.'}
+            value={consistency.stdDev.toFixed(2)}
+            hint={consistencyTag ?? 'Pts/race std. dev.'}
             tone={consistencyTag ? 'text-gold' : 'text-chalk'}
           />
         )}
@@ -331,7 +340,7 @@ export default function PlayerProfile() {
       {windowedSummary && statsWindow.kind !== 'all' && (
         <p className="mt-2 text-xs text-haze">
           In this window: {windowedSummary.gpCount} {windowedSummary.gpCount === 1 ? 'GP' : 'GPs'} ·{' '}
-          {windowedSummary.totalPoints} pts total ({windowedSummary.avgPoints.toFixed(1)} avg) ·{' '}
+          {windowedSummary.totalPoints} pts total ({windowedSummary.pointsPerRace.toFixed(2)}/race) ·{' '}
           <Delta value={windowedSummary.eloChange} /> rating
         </p>
       )}
@@ -405,7 +414,7 @@ export default function PlayerProfile() {
             >
               <Ordinal rank={entry.rank} className="text-xl" />
               <span className="text-xs text-haze">
-                {formatGpDate(gp.playedAt)} · {gp.entries.length} racers
+                {formatGpDate(gp.playedAt)} · {gp.entries.length} racers · {gp.races} races
               </span>
               <span className="flex items-baseline gap-3 font-mono text-sm">
                 <span className="text-chalk">{entry.points} pts</span>

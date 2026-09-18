@@ -104,7 +104,9 @@ export default function RecapCard({ recap }: { recap: Recap }) {
         <h2 className="font-display text-base font-bold uppercase tracking-tight text-chalk">
           Race recap
         </h2>
-        <span className="text-xs text-haze">{formatGpDate(recap.grandPrix.playedAt)}</span>
+        <span className="text-xs text-haze">
+          {formatGpDate(recap.grandPrix.playedAt)} · {recap.grandPrix.races} races
+        </span>
       </div>
 
       <ol className="divide-y divide-line">
