@@ -6,7 +6,13 @@
 // a new table: `gp_results` already stores each player's points and the exact
 // rating they carried into and out of every GP.
 
-import { DEFAULT_RACES, expectedScore, pairwiseEloExchange, placementBonuses } from './elo'
+import {
+  DEFAULT_RACES,
+  expectedScore,
+  pairwiseEloExchange,
+  placementBonuses,
+  pointsPerRace,
+} from './elo'
 import { rosterFromHistory } from './history'
 import type { GrandPrix, GpEntry } from './history'
 
@@ -500,10 +506,24 @@ export interface GpRecord {
   value: number
 }
 
+/**
+ * A best/worst single-GP score. `value` is points *per race*, not the raw
+ * total — a 10-race GP's total would otherwise beat every 4-race one — with the
+ * raw `points` and `races` kept so the page can show where it came from.
+ */
+export interface PointsRecord extends GpRecord {
+  points: number
+  races: number
+}
+
 export interface SpreadRecord {
   grandPrixId: string
   playedAt: string
+  /** Raw points between 1st and last. */
   spread: number
+  races: number
+  /** `spread` per race — what closest/blowout are actually ranked by. */
+  spreadPerRace: number
 }
 
 export interface StreakRecord {
@@ -529,8 +549,9 @@ export interface NightRecord {
 }
 
 export interface RecordsBook {
-  highestPoints: GpRecord | null
-  worstPoints: GpRecord | null
+  /** Ranked by points per race, so GPs of different lengths compare fairly. */
+  highestPoints: PointsRecord | null
+  worstPoints: PointsRecord | null
   biggestSwing: GpRecord | null
   longestStreak: StreakRecord | null
   biggestUpset: UpsetRecord | null
@@ -550,8 +571,8 @@ export interface RecordsBook {
  * counts this already tracks separately).
  */
 export function buildRecordsBook(history: GrandPrix[]): RecordsBook {
-  let highestPoints: GpRecord | null = null
-  let worstPoints: GpRecord | null = null
+  let highestPoints: PointsRecord | null = null
+  let worstPoints: PointsRecord | null = null
   let biggestSwing: GpRecord | null = null
   let biggestUpset: UpsetRecord | null = null
   let closestGp: SpreadRecord | null = null
@@ -563,33 +584,33 @@ export function buildRecordsBook(history: GrandPrix[]): RecordsBook {
     nightCounts.set(date, (nightCounts.get(date) ?? 0) + 1)
 
     // Entries are already sorted highest points first (groupIntoGrandPrix).
+    // Compared per race: a raw spread scales with GP length, so a 20-race GP
+    // would always look like the blowout and a 4-race one the nail-biter.
     const spread = gp.entries[0].points - gp.entries[gp.entries.length - 1].points
-    if (!closestGp || spread < closestGp.spread) {
-      closestGp = { grandPrixId: gp.id, playedAt: gp.playedAt, spread }
+    const spreadPerRace = pointsPerRace(spread, gp.races)
+    const spreadRecord: SpreadRecord = {
+      grandPrixId: gp.id,
+      playedAt: gp.playedAt,
+      spread,
+      races: gp.races,
+      spreadPerRace,
     }
-    if (!biggestBlowout || spread > biggestBlowout.spread) {
-      biggestBlowout = { grandPrixId: gp.id, playedAt: gp.playedAt, spread }
-    }
+    if (!closestGp || spreadPerRace < closestGp.spreadPerRace) closestGp = spreadRecord
+    if (!biggestBlowout || spreadPerRace > biggestBlowout.spreadPerRace) biggestBlowout = spreadRecord
 
     for (const entry of gp.entries) {
-      if (!highestPoints || entry.points > highestPoints.value) {
-        highestPoints = {
-          grandPrixId: gp.id,
-          playedAt: gp.playedAt,
-          playerId: entry.playerId,
-          playerName: entry.playerName,
-          value: entry.points,
-        }
+      const perRace = pointsPerRace(entry.points, gp.races)
+      const pointsRecord: PointsRecord = {
+        grandPrixId: gp.id,
+        playedAt: gp.playedAt,
+        playerId: entry.playerId,
+        playerName: entry.playerName,
+        value: perRace,
+        points: entry.points,
+        races: gp.races,
       }
-      if (!worstPoints || entry.points < worstPoints.value) {
-        worstPoints = {
-          grandPrixId: gp.id,
-          playedAt: gp.playedAt,
-          playerId: entry.playerId,
-          playerName: entry.playerName,
-          value: entry.points,
-        }
-      }
+      if (!highestPoints || perRace > highestPoints.value) highestPoints = pointsRecord
+      if (!worstPoints || perRace < worstPoints.value) worstPoints = pointsRecord
       if (!biggestSwing || Math.abs(entry.eloDelta) > Math.abs(biggestSwing.value)) {
         biggestSwing = {
           grandPrixId: gp.id,
@@ -639,13 +660,46 @@ export function buildRecordsBook(history: GrandPrix[]): RecordsBook {
   }
 }
 
+export interface PlayerPointsTotals {
+  /** Raw points summed over every GP in the slice. */
+  points: number
+  /** Races behind `points` — the sum of `races` over those GPs. */
+  races: number
+  gpCount: number
+}
+
+/**
+ * Each player's point and race totals across a slice of history — the client
+ * side stand-in for `player_stats`'s total_points/avg_points, which sum raw
+ * points per GP and so can't tell a 4-race GP from a 20-race one. Points per
+ * race is `points / races`, not `points / gpCount`.
+ */
+export function pointsTotalsByPlayer(history: GrandPrix[]): Map<string, PlayerPointsTotals> {
+  const totals = new Map<string, PlayerPointsTotals>()
+  for (const gp of history) {
+    for (const entry of gp.entries) {
+      const row = totals.get(entry.playerId) ?? { points: 0, races: 0, gpCount: 0 }
+      row.points += entry.points
+      row.races += gp.races
+      row.gpCount += 1
+      totals.set(entry.playerId, row)
+    }
+  }
+  return totals
+}
+
 /** A gap this long since the previous grand prix starts a new session. */
 export const SESSION_GAP_HOURS = 5
 
 export interface SessionStanding {
   playerId: string
   playerName: string
+  /** Ranked by this. Everyone in a GP scored over the same races, so it's fair within a night. */
   totalPoints: number
+  /** Races behind `totalPoints` — the sum of `races` over every GP the player was in. */
+  totalRaces: number
+  /** `totalPoints` per race raced, for comparing players who sat out different GPs. */
+  pointsPerRace: number
   /** Sum of this session's eloDelta across every GP the player was in. */
   netEloDelta: number
   gpCount: number
@@ -690,7 +744,7 @@ export function sessionsFromHistory(
   return groups.map((gps) => {
     const totals = new Map<
       string,
-      { name: string; points: number; elo: number; gpCount: number }
+      { name: string; points: number; races: number; elo: number; gpCount: number }
     >()
 
     for (const gp of gps) {
@@ -698,10 +752,12 @@ export function sessionsFromHistory(
         const row = totals.get(entry.playerId) ?? {
           name: entry.playerName,
           points: 0,
+          races: 0,
           elo: 0,
           gpCount: 0,
         }
         row.points += entry.points
+        row.races += gp.races
         row.elo += entry.eloDelta
         row.gpCount += 1
         totals.set(entry.playerId, row)
@@ -713,6 +769,8 @@ export function sessionsFromHistory(
         playerId,
         playerName: row.name,
         totalPoints: row.points,
+        totalRaces: row.races,
+        pointsPerRace: pointsPerRace(row.points, row.races),
         netEloDelta: Math.round(row.elo),
         gpCount: row.gpCount,
         rank: 0,

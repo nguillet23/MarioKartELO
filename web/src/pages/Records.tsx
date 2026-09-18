@@ -24,6 +24,11 @@ function Delta({ value }: { value: number }) {
   )
 }
 
+/** Points per race to two places — scores run 1..15 a race, so one decimal would blur real gaps. */
+function perRace(value: number): string {
+  return value.toFixed(2)
+}
+
 function sessionDateLabel(session: Session): string {
   const start = session.startedAt.slice(0, 10)
   const end = session.endedAt.slice(0, 10)
@@ -79,6 +84,7 @@ function SessionCard({ session }: { session: Session }) {
                 </Link>
                 <span className="flex shrink-0 items-baseline gap-3 font-mono text-sm">
                   <span className="text-chalk">{s.totalPoints} pts</span>
+                  <span className="text-haze">{perRace(s.pointsPerRace)}/race</span>
                   <Delta value={s.netEloDelta} />
                 </span>
               </li>
@@ -88,7 +94,9 @@ function SessionCard({ session }: { session: Session }) {
           <ol className="divide-y divide-line bg-pit-hi/40">
             {session.gps.map((gp) => (
               <li key={gp.id} className="px-4 py-3 text-sm text-chalk">
-                <span className="text-haze">{formatGpDate(gp.playedAt)}</span>
+                <span className="text-haze">
+                  {formatGpDate(gp.playedAt)} · {gp.races} races
+                </span>
                 {' · '}
                 {[...gp.entries]
                   .sort((a, b) => a.rank - b.rank)
@@ -211,10 +219,12 @@ export default function Records() {
           {book.highestPoints && (
             <RecordCard
               label="Highest single GP"
-              value={`${book.highestPoints.value} pts`}
+              value={`${perRace(book.highestPoints.value)} pts/race`}
               detail={
                 <>
                   <PlayerLink id={book.highestPoints.playerId} name={book.highestPoints.playerName} />
+                  {' · '}
+                  {book.highestPoints.points} pts over {book.highestPoints.races} races
                   {' · '}
                   {formatGpDate(book.highestPoints.playedAt)}
                 </>
@@ -225,10 +235,12 @@ export default function Records() {
           {book.worstPoints && (
             <RecordCard
               label="Worst single GP"
-              value={`${book.worstPoints.value} pts`}
+              value={`${perRace(book.worstPoints.value)} pts/race`}
               detail={
                 <>
                   <PlayerLink id={book.worstPoints.playerId} name={book.worstPoints.playerName} />
+                  {' · '}
+                  {book.worstPoints.points} pts over {book.worstPoints.races} races
                   {' · '}
                   {formatGpDate(book.worstPoints.playedAt)}
                 </>
@@ -274,16 +286,16 @@ export default function Records() {
           {book.closestGp && (
             <RecordCard
               label="Closest GP"
-              value={`${book.closestGp.spread} pt spread`}
-              detail={formatGpDate(book.closestGp.playedAt)}
+              value={`${perRace(book.closestGp.spreadPerRace)} pt/race spread`}
+              detail={`${book.closestGp.spread} pts over ${book.closestGp.races} races · ${formatGpDate(book.closestGp.playedAt)}`}
             />
           )}
 
           {book.biggestBlowout && (
             <RecordCard
               label="Worst blowout"
-              value={`${book.biggestBlowout.spread} pt spread`}
-              detail={formatGpDate(book.biggestBlowout.playedAt)}
+              value={`${perRace(book.biggestBlowout.spreadPerRace)} pt/race spread`}
+              detail={`${book.biggestBlowout.spread} pts over ${book.biggestBlowout.races} races · ${formatGpDate(book.biggestBlowout.playedAt)}`}
             />
           )}
 

@@ -72,6 +72,14 @@ export function minGpPoints(races: number): number {
 export function maxGpPoints(races: number): number {
   return races * MAX_POINTS_PER_RACE
 }
+/**
+ * A GP total (or a gap between two totals) on a per-race footing, so scores
+ * from GPs of different lengths can be compared. Always in 1..15 for a real
+ * score, whatever the race count.
+ */
+export function pointsPerRace(points: number, races: number): number {
+  return points / races
+}
 /** What the margin term in `actualScore` is normalized against. 56 for a 4-race GP. */
 export function pointsSpreadFor(races: number): number {
   return maxGpPoints(races) - minGpPoints(races)
