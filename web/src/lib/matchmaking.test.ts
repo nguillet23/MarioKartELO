@@ -21,7 +21,7 @@ function gp(id: string, playedAt: string, ranked: [string, number][]): GrandPrix
     eloDelta: 0,
     rank,
   }))
-  return { id, playedAt, entries }
+  return { id, playedAt, races: 4, entries }
 }
 
 const NOW = new Date('2026-01-01T22:00:00Z')

@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { computeGpElo, STARTING_ELO } from './elo'
+import { computeGpElo, DEFAULT_RACES, STARTING_ELO } from './elo'
 import { groupIntoGrandPrix, type GrandPrix } from './history'
 import {
+  ACHIEVEMENT_POINTS_PER_RACE,
   achievementsFor,
   attendance,
   buildRecap,
   buildRecordsBook,
+  clutchThreshold,
   consistencyRankings,
   headToHead,
   opponentRecords,
   playerBests,
   playersAtPeak,
+  pointsTotalsByPlayer,
   pointsConsistency,
   recentForm,
   rivalOf,
@@ -23,6 +26,8 @@ import {
 interface GpSpec {
   /** [playerId, points] — everyone starts at STARTING_ELO, as the schema does. */
   field: [string, number][]
+  /** Races the GP's points were summed over. Defaults to 4, the app's original fixed length. */
+  races?: number
 }
 
 /**
@@ -51,7 +56,7 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
       rating: ratings.get(playerId) ?? STARTING_ELO,
       gpCount: gpCounts.get(playerId) ?? 0,
     }))
-    const updates = computeGpElo(participants)
+    const updates = computeGpElo(participants, { races: spec.races })
 
     for (const update of updates) {
       ratings.set(update.playerId, update.eloAfter)
@@ -66,7 +71,10 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
       elo_after: updates[i].eloAfter,
       elo_delta: updates[i].eloDelta,
       // Ascending, one day apart, so the ordering is unambiguous.
-      grand_prix: { played_at: `2026-01-${String(index + 1).padStart(2, '0')}T20:00:00Z` },
+      grand_prix: {
+        played_at: `2026-01-${String(index + 1).padStart(2, '0')}T20:00:00Z`,
+        races: spec.races ?? DEFAULT_RACES,
+      },
       players: { name: p.playerId.toUpperCase() },
     }))
   })
@@ -80,7 +88,9 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
  * where whether two GPs are close enough in time to share a session is
  * exactly what's under test.
  */
-function makeHistoryAt(specs: { field: [string, number][]; playedAt: string }[]): GrandPrix[] {
+function makeHistoryAt(
+  specs: { field: [string, number][]; playedAt: string; races?: number }[],
+): GrandPrix[] {
   const ratings = new Map<string, number>()
   const gpCounts = new Map<string, number>()
 
@@ -91,7 +101,7 @@ function makeHistoryAt(specs: { field: [string, number][]; playedAt: string }[])
       rating: ratings.get(playerId) ?? STARTING_ELO,
       gpCount: gpCounts.get(playerId) ?? 0,
     }))
-    const updates = computeGpElo(participants)
+    const updates = computeGpElo(participants, { races: spec.races })
 
     for (const update of updates) {
       ratings.set(update.playerId, update.eloAfter)
@@ -105,7 +115,7 @@ function makeHistoryAt(specs: { field: [string, number][]; playedAt: string }[])
       elo_before: updates[i].eloBefore,
       elo_after: updates[i].eloAfter,
       elo_delta: updates[i].eloDelta,
-      grand_prix: { played_at: spec.playedAt },
+      grand_prix: { played_at: spec.playedAt, races: spec.races ?? DEFAULT_RACES },
       players: { name: p.playerId.toUpperCase() },
     }))
   })
@@ -234,6 +244,44 @@ describe('headToHead', () => {
   })
 })
 
+describe('opponentRecords across GP lengths', () => {
+  it('tracks the races behind each meeting and the running total', () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 30], ['w', 20], ['x', 10]] },
+      { races: 10, field: [['a', 100], ['b', 60], ['y', 50], ['z', 30]] },
+    ])
+    const record = headToHead(history, 'a', 'b')!
+    expect(record.meetings.map((m) => m.races)).toEqual([4, 10])
+    expect(record.races).toBe(14)
+    expect(record.pointsFor).toBe(140)
+    expect(record.pointsAgainst).toBe(90)
+    // 140 over 14 races: a fair per-race figure, where 140 vs 90 alone hides the lengths.
+    expect(record.pointsFor / record.races).toBe(10)
+
+    // w only shared the 4-race GP with a, so only those races count against them.
+    const vsW = opponentRecords(history, 'a').find((r) => r.opponentId === 'w')!
+    expect(vsW.races).toBe(4)
+  })
+
+  it("sums each meeting's swing to the player's real rating change, whatever the GP length", () => {
+    // Every rating change in the fixture came from computeGpElo with that GP's
+    // own race count, so the pairwise reconstruction has to use the same one.
+    const history = makeHistory([
+      { field: [['a', 60], ['b', 30], ['c', 20], ['d', 4]] },
+      { races: 10, field: [['a', 140], ['b', 60], ['c', 90], ['d', 30]] },
+      { races: 20, field: [['a', 100], ['b', 250], ['c', 180], ['d', 60]] },
+    ])
+    const records = opponentRecords(history, 'a')
+    const netElo = records.reduce((sum, r) => sum + r.netElo, 0)
+    const realDelta = history.reduce(
+      (sum, gp) => sum + (gp.entries.find((e) => e.playerId === 'a')?.eloDelta ?? 0),
+      0,
+    )
+    // Rounded once per opponent, so allow one point of drift per opponent.
+    expect(Math.abs(netElo - realDelta)).toBeLessThanOrEqual(records.length)
+  })
+})
+
 describe('opponentRecords', () => {
   it('lists every opponent, most-played first', () => {
     const history = makeHistory([
@@ -314,6 +362,32 @@ describe('streaksFor', () => {
   })
 })
 
+describe('playerBests across GP lengths', () => {
+  const mixed = () =>
+    makeHistory([
+      { field: [['a', 56], ['b', 30], ['w', 20], ['x', 8]] },
+      { races: 10, field: [['a', 130], ['b', 60], ['w', 40], ['x', 12]] },
+    ])
+
+  it('picks the best GP by points per race, not by raw total', () => {
+    // a's 130 over 10 races is the bigger raw total, but 13 a race trails 56 over 4 (14).
+    const bests = playerBests(mixed(), 'a')!
+    expect(bests.bestPoints).toBe(14)
+    expect(bests.bestPointsTotal).toBe(56)
+    expect(bests.bestPointsRaces).toBe(4)
+    expect(bests.bestPointsAt).toBe(mixed()[0].playedAt)
+  })
+
+  it('picks the worst GP by points per race, not by raw total', () => {
+    // x's 8 is the smaller raw total, but 12 over 10 races (1.2 a race) is the weaker night.
+    const bests = playerBests(mixed(), 'x')!
+    expect(bests.worstPoints).toBeCloseTo(1.2, 10)
+    expect(bests.worstPointsTotal).toBe(12)
+    expect(bests.worstPointsRaces).toBe(10)
+    expect(bests.bestPoints).toBe(2)
+  })
+})
+
 describe('playerBests', () => {
   it('tracks peak rating, best GP, and worst GP', () => {
     const history = makeHistory([
@@ -323,8 +397,13 @@ describe('playerBests', () => {
 
     const bests = playerBests(history, 'a')!
     expect(bests.gpCount).toBe(2)
-    expect(bests.bestPoints).toBe(60)
-    expect(bests.worstPoints).toBe(20)
+    // Per race: 60 over the default 4 races is 15 a race, 20 is 5.
+    expect(bests.bestPoints).toBe(15)
+    expect(bests.bestPointsTotal).toBe(60)
+    expect(bests.bestPointsRaces).toBe(4)
+    expect(bests.worstPoints).toBe(5)
+    expect(bests.worstPointsTotal).toBe(20)
+    expect(bests.worstPointsRaces).toBe(4)
     expect(bests.wins).toBe(1)
     expect(bests.peakElo).toBe(history[0].entries.find((e) => e.playerId === 'a')!.eloAfter)
     expect(bests.atPeakNow).toBe(false)
@@ -362,6 +441,37 @@ describe('playersAtPeak', () => {
     for (const playerId of ['a', 'b', 'c']) {
       expect(atPeak.has(playerId)).toBe(playerBests(history, playerId)!.atPeakNow)
     }
+  })
+})
+
+describe('buildRecap across GP lengths', () => {
+  const recapFor = (races: number, points: number) => {
+    const history = makeHistory([
+      { field: [['a', 56], ['b', 30], ['w', 20], ['x', 8]] },
+      { races, field: [['a', points], ['b', 30], ['w', 20], ['x', 8]] },
+    ])
+    return buildRecap(history, 'gp-2')!.entries.find((e) => e.playerId === 'a')!
+  }
+
+  it('does not award Best GP for a bigger raw total over a longer GP', () => {
+    // 130 over 10 races beats 56 on the page but is 13 a race against 14 — a step down.
+    const a = recapFor(10, 130)
+    expect(a.bestPoints).toBe(false)
+    expect(a.worstPoints).toBe(true)
+  })
+
+  it('awards Best GP when the per-race score genuinely tops every earlier GP', () => {
+    // 145 over 10 races = 14.5 a race, above the 14 a race of 56 over 4.
+    const a = recapFor(10, 145)
+    expect(a.bestPoints).toBe(true)
+    expect(a.worstPoints).toBe(false)
+  })
+
+  it('treats the same score per race as neither a best nor a worst', () => {
+    // 140 over 10 races = 14 a race, exactly level with 56 over 4.
+    const a = recapFor(10, 140)
+    expect(a.bestPoints).toBe(false)
+    expect(a.worstPoints).toBe(false)
   })
 })
 
@@ -481,6 +591,16 @@ describe('recentForm', () => {
 })
 
 describe('pointsConsistency', () => {
+  it('is zero for a player who scores the same per race in GPs of different lengths', () => {
+    // 40, 80 and 120 are wildly different totals, but all 10 a race.
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 20], ['w', 15], ['x', 10]] },
+      { races: 8, field: [['a', 80], ['b', 40], ['w', 30], ['x', 20]] },
+      { races: 12, field: [['a', 120], ['b', 60], ['w', 45], ['x', 30]] },
+    ])
+    expect(pointsConsistency(history, 'a')!.stdDev).toBe(0)
+  })
+
   it('is zero for a player who scores the same every GP', () => {
     const history = makeHistory([
       { field: [['a', 30], ['b', 20], ['w', 15], ['x', 10]] },
@@ -579,8 +699,38 @@ describe('buildRecordsBook', () => {
         { field: [['a', 30], ['b', 4], ['w', 15], ['x', 10]] },
       ]),
     )
-    expect(book.highestPoints).toMatchObject({ playerId: 'a', value: 60 })
-    expect(book.worstPoints).toMatchObject({ playerId: 'b', value: 4 })
+    // `value` is points per race (60 over the default 4 races = 15); the raw
+    // total and race count ride along for display.
+    expect(book.highestPoints).toMatchObject({ playerId: 'a', value: 15, points: 60, races: 4 })
+    expect(book.worstPoints).toMatchObject({ playerId: 'b', value: 1, points: 4, races: 4 })
+  })
+
+  it('ranks single-GP points per race, so a longer GP does not win on raw total alone', () => {
+    const book = buildRecordsBook(
+      makeHistory([
+        // 4 races: a's 56 is 14 a race — a near-sweep.
+        { field: [['a', 56], ['b', 30], ['w', 20], ['x', 8]] },
+        // 10 races: b's 130 is the biggest raw total on record but only 13 a race,
+        // and x's 12 beats x's 8 on raw total yet is the worst score a race (1.2 vs 2.0).
+        { races: 10, field: [['b', 130], ['c', 60], ['w', 40], ['x', 12]] },
+      ]),
+    )
+    expect(book.highestPoints).toMatchObject({ playerId: 'a', value: 14, points: 56, races: 4 })
+    expect(book.worstPoints).toMatchObject({ playerId: 'x', points: 12, races: 10 })
+    expect(book.worstPoints?.value).toBeCloseTo(1.2, 10)
+  })
+
+  it('ranks the closest GP and biggest blowout by spread per race', () => {
+    const book = buildRecordsBook(
+      makeHistory([
+        // 4 races, 20 pts apart = 5 a race.
+        { field: [['a', 30], ['b', 10], ['w', 25], ['x', 20]] },
+        // 10 races, 40 pts apart = 4 a race: the bigger raw gap, but the tighter GP.
+        { races: 10, field: [['a', 100], ['b', 60], ['w', 80], ['x', 70]] },
+      ]),
+    )
+    expect(book.closestGp).toMatchObject({ grandPrixId: 'gp-2', spread: 40, races: 10, spreadPerRace: 4 })
+    expect(book.biggestBlowout).toMatchObject({ grandPrixId: 'gp-1', spread: 20, races: 4, spreadPerRace: 5 })
   })
 
   it('finds the closest GP and the biggest blowout', () => {
@@ -668,8 +818,64 @@ describe('sessionsFromHistory', () => {
     expect(session.standings[0].gpCount).toBe(3)
   })
 
+  it('reports points per race over the races each player actually raced', () => {
+    const history = makeHistoryAt([
+      { field: [['a', 40], ['b', 30], ['w', 20], ['x', 10]], playedAt: '2026-01-01T20:00:00Z' },
+      { races: 10, field: [['a', 100], ['b', 90], ['y', 60], ['z', 30]], playedAt: '2026-01-01T21:00:00Z' },
+    ])
+    const [session] = sessionsFromHistory(history)
+    const standing = (id: string) => session.standings.find((s) => s.playerId === id)!
+
+    // a raced both GPs: 140 points over 4 + 10 races.
+    expect(standing('a')).toMatchObject({ totalPoints: 140, totalRaces: 14, pointsPerRace: 10 })
+    // w only raced the 4-race GP, y only the 10-race one — each judged over their own races.
+    expect(standing('w')).toMatchObject({ totalPoints: 20, totalRaces: 4, pointsPerRace: 5 })
+    expect(standing('y')).toMatchObject({ totalPoints: 60, totalRaces: 10, pointsPerRace: 6 })
+  })
+
+  it('still ranks a session by total points, not points per race', () => {
+    const history = makeHistoryAt([
+      { field: [['a', 40], ['b', 30], ['w', 20], ['x', 10]], playedAt: '2026-01-01T20:00:00Z' },
+      { races: 10, field: [['a', 100], ['b', 90], ['y', 60], ['z', 30]], playedAt: '2026-01-01T21:00:00Z' },
+    ])
+    const [session] = sessionsFromHistory(history)
+    const standing = (id: string) => session.standings.find((s) => s.playerId === id)!
+    // z (30 pts, 3 a race) out-totals w (20 pts, 5 a race). Ranking by points per race
+    // would flip them; ranking is by total, so z stays ahead.
+    expect(standing('z').totalPoints).toBeGreaterThan(standing('w').totalPoints)
+    expect(standing('w').pointsPerRace).toBeGreaterThan(standing('z').pointsPerRace)
+    expect(standing('z').rank).toBeLessThan(standing('w').rank)
+  })
+
   it('is empty for an empty history', () => {
     expect(sessionsFromHistory([])).toEqual([])
+  })
+})
+
+describe('pointsTotalsByPlayer', () => {
+  it('sums points and races per player, so per-race differs from per-GP once lengths vary', () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 30], ['w', 20], ['x', 10]] },
+      { races: 10, field: [['a', 100], ['b', 90], ['w', 60], ['x', 30]] },
+    ])
+    const totals = pointsTotalsByPlayer(history)
+
+    expect(totals.get('a')).toEqual({ points: 140, races: 14, gpCount: 2 })
+    // 140 / 2 GPs would say 70; over the 14 races actually raced it's 10.
+    expect(totals.get('a')!.points / totals.get('a')!.races).toBe(10)
+    expect(totals.get('x')).toEqual({ points: 40, races: 14, gpCount: 2 })
+  })
+
+  it('only counts the races of GPs a player was in', () => {
+    const history = makeHistory([
+      { field: [['a', 40], ['b', 30], ['w', 20], ['x', 10]] },
+      { races: 10, field: [['a', 100], ['b', 90], ['y', 60], ['z', 30]] },
+    ])
+    expect(pointsTotalsByPlayer(history).get('w')).toEqual({ points: 20, races: 4, gpCount: 1 })
+  })
+
+  it('is empty for an empty history', () => {
+    expect(pointsTotalsByPlayer([]).size).toBe(0)
   })
 })
 
@@ -734,6 +940,31 @@ describe('achievementsFor', () => {
       history[0].playedAt,
     )
     expect(achievementsFor(history, 'b').find((a) => a.id === 'clutch')?.unlockedAt).toBeNull()
+  })
+
+  it('keeps the clutch line at exactly 55 points for a default 4-race GP', () => {
+    expect(clutchThreshold(4)).toBe(55)
+    const clutch = (points: number) =>
+      achievementsFor(
+        makeHistory([{ field: [['a', points], ['b', 10], ['w', 8], ['x', 4]] }]),
+        'a',
+      ).find((a) => a.id === 'clutch')?.unlockedAt
+    expect(clutch(55)).not.toBeNull()
+    expect(clutch(54)).toBeNull()
+  })
+
+  it('scales the clutch line with the GP length', () => {
+    expect(clutchThreshold(10)).toBe(ACHIEVEMENT_POINTS_PER_RACE * 10)
+    const clutch = (races: number, points: number) =>
+      achievementsFor(
+        makeHistory([{ races, field: [['a', points], ['b', 10], ['w', 8], ['x', 4]] }]),
+        'a',
+      ).find((a) => a.id === 'clutch')?.unlockedAt
+    // 55 points was a near-sweep of 4 races; over 10 it's barely over a third of the available total...
+    expect(clutch(10, 55)).toBeNull()
+    // ...while the same share of a 10-race GP (137.5, so 138 whole points) does unlock it.
+    expect(clutch(10, 138)).not.toBeNull()
+    expect(clutch(10, 137)).toBeNull()
   })
 
   it('unlocks giant slayer only when beating the roster-wide top-rated player', () => {

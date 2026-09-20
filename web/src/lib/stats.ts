@@ -6,7 +6,13 @@
 // a new table: `gp_results` already stores each player's points and the exact
 // rating they carried into and out of every GP.
 
-import { expectedScore, pairwiseEloExchange, placementBonuses } from './elo'
+import {
+  DEFAULT_RACES,
+  expectedScore,
+  pairwiseEloExchange,
+  placementBonuses,
+  pointsPerRace,
+} from './elo'
 import { rosterFromHistory } from './history'
 import type { GrandPrix, GpEntry } from './history'
 
@@ -16,6 +22,8 @@ export interface Meeting {
   playedAt: string
   /** Field size, which is what scales the pairwise Elo exchange. */
   fieldSize: number
+  /** How many races `points` and `opponentPoints` were summed over. */
+  races: number
   points: number
   opponentPoints: number
   /** How much of this GP's rating change came from this opponent, unrounded. */
@@ -30,8 +38,11 @@ export interface OpponentRecord {
   wins: number
   losses: number
   ties: number
+  /** Raw points summed over every meeting. Divide by `races` to compare across GP lengths. */
   pointsFor: number
   pointsAgainst: number
+  /** Races behind `pointsFor` / `pointsAgainst` — the sum of `races` over every meeting. */
+  races: number
   /** Cumulative Elo taken off this opponent (negative: given to them). */
   netElo: number
 }
@@ -50,9 +61,16 @@ export interface PlayerBests {
   peakEloAt: string | null
   /** True when the player's rating is sitting at its all-time high right now. */
   atPeakNow: boolean
+  /** Best single-GP score, in points per race so GPs of different lengths compare fairly. */
   bestPoints: number
+  /** The raw total and race count behind `bestPoints`, for showing where it came from. */
+  bestPointsTotal: number
+  bestPointsRaces: number
   bestPointsAt: string | null
+  /** Worst single-GP score, in points per race. */
   worstPoints: number
+  worstPointsTotal: number
+  worstPointsRaces: number
   wins: number
 }
 
@@ -121,6 +139,7 @@ export function opponentRecords(history: GrandPrix[], playerId: string): Opponen
         ties: 0,
         pointsFor: 0,
         pointsAgainst: 0,
+        races: 0,
         netElo: 0,
       }
 
@@ -128,6 +147,7 @@ export function opponentRecords(history: GrandPrix[], playerId: string): Opponen
         { points: me.points, gpCount, placementBonus: myBonus },
         { points: other.points },
         gp.entries.length,
+        { races: gp.races },
       )
 
       record.opponentName = other.playerName
@@ -135,6 +155,7 @@ export function opponentRecords(history: GrandPrix[], playerId: string): Opponen
         grandPrixId: gp.id,
         playedAt: gp.playedAt,
         fieldSize: gp.entries.length,
+        races: gp.races,
         points: me.points,
         opponentPoints: other.points,
         eloSwing,
@@ -144,6 +165,7 @@ export function opponentRecords(history: GrandPrix[], playerId: string): Opponen
       else record.ties += 1
       record.pointsFor += me.points
       record.pointsAgainst += other.points
+      record.races += gp.races
       record.netElo += eloSwing
 
       records.set(other.playerId, record)
@@ -240,21 +262,24 @@ export function playerBests(history: GrandPrix[], playerId: string): PlayerBests
 
   let peakElo = entries[0].entry.eloBefore
   let peakEloAt: string | null = null
-  let bestPoints = entries[0].entry.points
-  let bestPointsAt = entries[0].gp.playedAt
-  let worstPoints = entries[0].entry.points
+  // Best and worst are judged per race, not on the raw total — a long GP's
+  // total would otherwise be everyone's "best" and a short one's their "worst".
+  let best = entries[0]
+  let worst = entries[0]
   let wins = 0
 
-  for (const { gp, entry } of entries) {
+  for (const current of entries) {
+    const { gp, entry } = current
     if (entry.eloAfter > peakElo) {
       peakElo = entry.eloAfter
       peakEloAt = gp.playedAt
     }
-    if (entry.points > bestPoints) {
-      bestPoints = entry.points
-      bestPointsAt = gp.playedAt
+    if (pointsPerRace(entry.points, gp.races) > pointsPerRace(best.entry.points, best.gp.races)) {
+      best = current
     }
-    if (entry.points < worstPoints) worstPoints = entry.points
+    if (pointsPerRace(entry.points, gp.races) < pointsPerRace(worst.entry.points, worst.gp.races)) {
+      worst = current
+    }
     if (entry.rank === 1) wins += 1
   }
 
@@ -264,9 +289,13 @@ export function playerBests(history: GrandPrix[], playerId: string): PlayerBests
     peakElo,
     peakEloAt,
     atPeakNow: currentElo >= peakElo,
-    bestPoints,
-    bestPointsAt,
-    worstPoints,
+    bestPoints: pointsPerRace(best.entry.points, best.gp.races),
+    bestPointsTotal: best.entry.points,
+    bestPointsRaces: best.gp.races,
+    bestPointsAt: best.gp.playedAt,
+    worstPoints: pointsPerRace(worst.entry.points, worst.gp.races),
+    worstPointsTotal: worst.entry.points,
+    worstPointsRaces: worst.gp.races,
     wins,
   }
 }
@@ -333,9 +362,9 @@ function biggestUpsetIn(gp: GrandPrix, playerId: string): Upset | null {
 export interface RecapEntry extends GpEntry {
   /** This GP put the player at a rating they have never been above. */
   peakElo: boolean
-  /** Their highest points total ever — needs at least one earlier GP. */
+  /** Their highest score per race ever — needs at least one earlier GP. */
   bestPoints: boolean
-  /** Their lowest points total ever — needs at least one earlier GP. */
+  /** Their lowest score per race ever — needs at least one earlier GP. */
   worstPoints: boolean
   /** Their very first grand prix. */
   debut: boolean
@@ -370,19 +399,25 @@ export function buildRecap(history: GrandPrix[], grandPrixId: string): Recap | n
 
   const entries: RecapEntry[] = grandPrix.entries.map((entry) => {
     const priorEntries = earlier
-      .map((gp) => entryFor(gp, entry.playerId))
-      .filter((e): e is GpEntry => e !== undefined)
+      .map((gp) => ({ entry: entryFor(gp, entry.playerId), races: gp.races }))
+      .filter((p): p is { entry: GpEntry; races: number } => p.entry !== undefined)
 
     const priorPeak = priorEntries.reduce(
-      (peak, e) => Math.max(peak, e.eloAfter),
-      priorEntries.length > 0 ? priorEntries[0].eloBefore : entry.eloBefore,
+      (peak, p) => Math.max(peak, p.entry.eloAfter),
+      priorEntries.length > 0 ? priorEntries[0].entry.eloBefore : entry.eloBefore,
     )
+
+    // Best/worst compare per race: a raw total says nothing about a GP of a
+    // different length, so a 10-race night would otherwise be a "Best GP" for
+    // everyone who'd only ever played 4.
+    const perRace = pointsPerRace(entry.points, grandPrix.races)
+    const priorPerRace = priorEntries.map((p) => pointsPerRace(p.entry.points, p.races))
 
     return {
       ...entry,
       peakElo: entry.eloAfter > priorPeak,
-      bestPoints: priorEntries.length > 0 && priorEntries.every((e) => entry.points > e.points),
-      worstPoints: priorEntries.length > 0 && priorEntries.every((e) => entry.points < e.points),
+      bestPoints: priorPerRace.length > 0 && priorPerRace.every((p) => perRace > p),
+      worstPoints: priorPerRace.length > 0 && priorPerRace.every((p) => perRace < p),
       debut: priorEntries.length === 0,
       upset: biggestUpsetIn(grandPrix, entry.playerId),
     }
@@ -409,16 +444,20 @@ export const CONSISTENCY_MIN_GPS = 3
 
 export interface ConsistencyInfo {
   gpCount: number
-  /** Population standard deviation of points across every GP this player has entered. Lower is steadier. */
+  /**
+   * Population standard deviation of points *per race* across every GP this
+   * player has entered. Lower is steadier. Per race so a 20-race GP's total
+   * doesn't register as a wild swing against a 4-race one.
+   */
   stdDev: number
 }
 
-/** How steady a player's points totals have been. Null if they've never raced. */
+/** How steady a player's scores have been, per race. Null if they've never raced. */
 export function pointsConsistency(history: GrandPrix[], playerId: string): ConsistencyInfo | null {
   const gps = gpsFor(history, playerId)
   if (gps.length === 0) return null
 
-  const points = gps.map((gp) => entryFor(gp, playerId)!.points)
+  const points = gps.map((gp) => pointsPerRace(entryFor(gp, playerId)!.points, gp.races))
   const mean = points.reduce((sum, p) => sum + p, 0) / points.length
   const variance = points.reduce((sum, p) => sum + (p - mean) ** 2, 0) / points.length
 
@@ -499,10 +538,24 @@ export interface GpRecord {
   value: number
 }
 
+/**
+ * A best/worst single-GP score. `value` is points *per race*, not the raw
+ * total — a 10-race GP's total would otherwise beat every 4-race one — with the
+ * raw `points` and `races` kept so the page can show where it came from.
+ */
+export interface PointsRecord extends GpRecord {
+  points: number
+  races: number
+}
+
 export interface SpreadRecord {
   grandPrixId: string
   playedAt: string
+  /** Raw points between 1st and last. */
   spread: number
+  races: number
+  /** `spread` per race — what closest/blowout are actually ranked by. */
+  spreadPerRace: number
 }
 
 export interface StreakRecord {
@@ -528,8 +581,9 @@ export interface NightRecord {
 }
 
 export interface RecordsBook {
-  highestPoints: GpRecord | null
-  worstPoints: GpRecord | null
+  /** Ranked by points per race, so GPs of different lengths compare fairly. */
+  highestPoints: PointsRecord | null
+  worstPoints: PointsRecord | null
   biggestSwing: GpRecord | null
   longestStreak: StreakRecord | null
   biggestUpset: UpsetRecord | null
@@ -549,8 +603,8 @@ export interface RecordsBook {
  * counts this already tracks separately).
  */
 export function buildRecordsBook(history: GrandPrix[]): RecordsBook {
-  let highestPoints: GpRecord | null = null
-  let worstPoints: GpRecord | null = null
+  let highestPoints: PointsRecord | null = null
+  let worstPoints: PointsRecord | null = null
   let biggestSwing: GpRecord | null = null
   let biggestUpset: UpsetRecord | null = null
   let closestGp: SpreadRecord | null = null
@@ -562,33 +616,33 @@ export function buildRecordsBook(history: GrandPrix[]): RecordsBook {
     nightCounts.set(date, (nightCounts.get(date) ?? 0) + 1)
 
     // Entries are already sorted highest points first (groupIntoGrandPrix).
+    // Compared per race: a raw spread scales with GP length, so a 20-race GP
+    // would always look like the blowout and a 4-race one the nail-biter.
     const spread = gp.entries[0].points - gp.entries[gp.entries.length - 1].points
-    if (!closestGp || spread < closestGp.spread) {
-      closestGp = { grandPrixId: gp.id, playedAt: gp.playedAt, spread }
+    const spreadPerRace = pointsPerRace(spread, gp.races)
+    const spreadRecord: SpreadRecord = {
+      grandPrixId: gp.id,
+      playedAt: gp.playedAt,
+      spread,
+      races: gp.races,
+      spreadPerRace,
     }
-    if (!biggestBlowout || spread > biggestBlowout.spread) {
-      biggestBlowout = { grandPrixId: gp.id, playedAt: gp.playedAt, spread }
-    }
+    if (!closestGp || spreadPerRace < closestGp.spreadPerRace) closestGp = spreadRecord
+    if (!biggestBlowout || spreadPerRace > biggestBlowout.spreadPerRace) biggestBlowout = spreadRecord
 
     for (const entry of gp.entries) {
-      if (!highestPoints || entry.points > highestPoints.value) {
-        highestPoints = {
-          grandPrixId: gp.id,
-          playedAt: gp.playedAt,
-          playerId: entry.playerId,
-          playerName: entry.playerName,
-          value: entry.points,
-        }
+      const perRace = pointsPerRace(entry.points, gp.races)
+      const pointsRecord: PointsRecord = {
+        grandPrixId: gp.id,
+        playedAt: gp.playedAt,
+        playerId: entry.playerId,
+        playerName: entry.playerName,
+        value: perRace,
+        points: entry.points,
+        races: gp.races,
       }
-      if (!worstPoints || entry.points < worstPoints.value) {
-        worstPoints = {
-          grandPrixId: gp.id,
-          playedAt: gp.playedAt,
-          playerId: entry.playerId,
-          playerName: entry.playerName,
-          value: entry.points,
-        }
-      }
+      if (!highestPoints || perRace > highestPoints.value) highestPoints = pointsRecord
+      if (!worstPoints || perRace < worstPoints.value) worstPoints = pointsRecord
       if (!biggestSwing || Math.abs(entry.eloDelta) > Math.abs(biggestSwing.value)) {
         biggestSwing = {
           grandPrixId: gp.id,
@@ -638,13 +692,46 @@ export function buildRecordsBook(history: GrandPrix[]): RecordsBook {
   }
 }
 
+export interface PlayerPointsTotals {
+  /** Raw points summed over every GP in the slice. */
+  points: number
+  /** Races behind `points` — the sum of `races` over those GPs. */
+  races: number
+  gpCount: number
+}
+
+/**
+ * Each player's point and race totals across a slice of history — the client
+ * side stand-in for `player_stats`'s total_points/avg_points, which sum raw
+ * points per GP and so can't tell a 4-race GP from a 20-race one. Points per
+ * race is `points / races`, not `points / gpCount`.
+ */
+export function pointsTotalsByPlayer(history: GrandPrix[]): Map<string, PlayerPointsTotals> {
+  const totals = new Map<string, PlayerPointsTotals>()
+  for (const gp of history) {
+    for (const entry of gp.entries) {
+      const row = totals.get(entry.playerId) ?? { points: 0, races: 0, gpCount: 0 }
+      row.points += entry.points
+      row.races += gp.races
+      row.gpCount += 1
+      totals.set(entry.playerId, row)
+    }
+  }
+  return totals
+}
+
 /** A gap this long since the previous grand prix starts a new session. */
 export const SESSION_GAP_HOURS = 5
 
 export interface SessionStanding {
   playerId: string
   playerName: string
+  /** Ranked by this. Everyone in a GP scored over the same races, so it's fair within a night. */
   totalPoints: number
+  /** Races behind `totalPoints` — the sum of `races` over every GP the player was in. */
+  totalRaces: number
+  /** `totalPoints` per race raced, for comparing players who sat out different GPs. */
+  pointsPerRace: number
   /** Sum of this session's eloDelta across every GP the player was in. */
   netEloDelta: number
   gpCount: number
@@ -689,7 +776,7 @@ export function sessionsFromHistory(
   return groups.map((gps) => {
     const totals = new Map<
       string,
-      { name: string; points: number; elo: number; gpCount: number }
+      { name: string; points: number; races: number; elo: number; gpCount: number }
     >()
 
     for (const gp of gps) {
@@ -697,10 +784,12 @@ export function sessionsFromHistory(
         const row = totals.get(entry.playerId) ?? {
           name: entry.playerName,
           points: 0,
+          races: 0,
           elo: 0,
           gpCount: 0,
         }
         row.points += entry.points
+        row.races += gp.races
         row.elo += entry.eloDelta
         row.gpCount += 1
         totals.set(entry.playerId, row)
@@ -712,6 +801,8 @@ export function sessionsFromHistory(
         playerId,
         playerName: row.name,
         totalPoints: row.points,
+        totalRaces: row.races,
+        pointsPerRace: pointsPerRace(row.points, row.races),
         netEloDelta: Math.round(row.elo),
         gpCount: row.gpCount,
         rank: 0,
@@ -799,8 +890,20 @@ export function windowGpsFor(
   return gps.filter((gp) => new Date(gp.playedAt).getTime() >= cutoff)
 }
 
-/** Points total that earns the "Clutch" achievement — a near-sweep of every race. */
-export const ACHIEVEMENT_POINTS_THRESHOLD = 55
+/**
+ * Average points per race that earns the "Clutch" achievement — a near-sweep of
+ * every race. 13.75 a race is 55 points over the default 4 races (55 of a
+ * possible 60), and scales with the GP's length so a short or long GP judges it
+ * the same way. Expressed per race rather than as a 0.9166… fraction of the max
+ * because 13.75 is exact in binary floating point, so 55 points over 4 races
+ * lands exactly on the line instead of a rounding error either side of it.
+ */
+export const ACHIEVEMENT_POINTS_PER_RACE = 13.75
+
+/** The points total that earns "Clutch" in a GP of the given length. */
+export function clutchThreshold(races: number): number {
+  return ACHIEVEMENT_POINTS_PER_RACE * races
+}
 /** GP count that earns the "Regular" achievement. */
 export const ACHIEVEMENT_GP_MILESTONE = 10
 
@@ -841,7 +944,7 @@ export function achievementsFor(history: GrandPrix[], playerId: string): Achieve
     const me = entryFor(gp, playerId)
     if (me) {
       if (!firstWinAt && me.rank === 1) firstWinAt = gp.playedAt
-      if (!bigScoreAt && me.points >= ACHIEVEMENT_POINTS_THRESHOLD) bigScoreAt = gp.playedAt
+      if (!bigScoreAt && me.points >= clutchThreshold(gp.races)) bigScoreAt = gp.playedAt
       if (!giantSlayerAt && topId && topId !== playerId) {
         const top = entryFor(gp, topId)
         if (top && me.points > top.points) giantSlayerAt = gp.playedAt
@@ -887,7 +990,7 @@ export function achievementsFor(history: GrandPrix[], playerId: string): Achieve
     {
       id: 'clutch',
       label: 'Clutch',
-      description: `Score ${ACHIEVEMENT_POINTS_THRESHOLD}+ points in a single grand prix.`,
+      description: `Score ${clutchThreshold(DEFAULT_RACES)}+ points in a 4-race grand prix, or the same share of the available points in a longer or shorter one.`,
       unlockedAt: bigScoreAt,
     },
     {

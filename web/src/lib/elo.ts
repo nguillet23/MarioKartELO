@@ -47,15 +47,53 @@ export const MIN_ELO = 0
  */
 export const RATING_SCALE = 80
 
-/** A GP's point range: 4 = last in every race, 60 = 1st in every race. */
-export const MIN_GP_POINTS = 4
-export const MAX_GP_POINTS = 60
-export const POINTS_SPREAD = MAX_GP_POINTS - MIN_GP_POINTS
+/**
+ * How many races are summed into one GP's point total. 4 is what the app
+ * assumed before this was configurable, so it stays the default everywhere a
+ * race count isn't given (and is what every pre-existing GP was backfilled to).
+ *
+ * The bounds are mirrored by the `races` check on `grand_prix` and the range
+ * check inside `submit_gp` in `supabase/migrations/0002_races_per_gp.sql` —
+ * change them together. Not to be confused with `raceSize` in matchmaking.ts,
+ * which is how many *players* race at once.
+ */
+export const DEFAULT_RACES = 4
+export const MIN_RACES = 4
+export const MAX_RACES = 48
+
+/** Mario Kart 8 Deluxe's 12-player single-race scoring: 1st = 15 … 12th = 1. */
+export const MIN_POINTS_PER_RACE = 1
+export const MAX_POINTS_PER_RACE = 15
+
+/** A GP's point range for a given race count: last in every race … 1st in every race. */
+export function minGpPoints(races: number): number {
+  return races * MIN_POINTS_PER_RACE
+}
+export function maxGpPoints(races: number): number {
+  return races * MAX_POINTS_PER_RACE
+}
+/**
+ * A GP total (or a gap between two totals) on a per-race footing, so scores
+ * from GPs of different lengths can be compared. Always in 1..15 for a real
+ * score, whatever the race count.
+ */
+export function pointsPerRace(points: number, races: number): number {
+  return points / races
+}
+/** What the margin term in `actualScore` is normalized against. 56 for a 4-race GP. */
+export function pointsSpreadFor(races: number): number {
+  return maxGpPoints(races) - minGpPoints(races)
+}
+
+export function isValidRaceCount(races: number): boolean {
+  return Number.isInteger(races) && races >= MIN_RACES && races <= MAX_RACES
+}
 
 /**
  * How much of a win's credit is margin-dependent (0 = flat win/loss, ignore
  * margin entirely; 1 = a 1-point win is worth almost nothing). At 0.5 a bare
- * win scores 0.75 against that opponent and a 60-4 sweep scores the full 1.0.
+ * win scores 0.75 against that opponent and a sweep — winning by the GP's full
+ * point spread, 60-4 in a 4-race GP — scores the full 1.0.
  *
  * Deliberately linear rather than squared: in a real GP the top two players
  * are usually within ~10 points of each other, and squaring the margin
@@ -80,7 +118,7 @@ export interface GpParticipant {
   playerId: string
   /** Rating going into this GP. */
   rating: number
-  /** Total points scored across the GP's 4 races. */
+  /** Total points scored across all of the GP's races. */
   points: number
   /** GPs played before this one — drives the provisional K taper. */
   gpCount: number
@@ -98,6 +136,12 @@ export interface EloOptions {
   k?: number
   /** Override MARGIN_WEIGHT. */
   marginWeight?: number
+  /**
+   * How many races this GP's points were summed over (default DEFAULT_RACES).
+   * Sets the point spread the margin term is measured against — a 10-point gap
+   * is a bigger deal over 4 races than over 20.
+   */
+  races?: number
 }
 
 /**
@@ -133,9 +177,10 @@ export function actualScore(
   pointsA: number,
   pointsB: number,
   marginWeight: number = MARGIN_WEIGHT,
+  pointsSpread: number = pointsSpreadFor(DEFAULT_RACES),
 ): number {
   if (pointsA === pointsB) return 0.5
-  const margin = Math.min(Math.abs(pointsA - pointsB) / POINTS_SPREAD, 1)
+  const margin = Math.min(Math.abs(pointsA - pointsB) / pointsSpread, 1)
   const credit = 0.5 * (1 - marginWeight + marginWeight * margin)
   return pointsA > pointsB ? 0.5 + credit : 0.5 - credit
 }
@@ -182,7 +227,11 @@ export function computeGpElo(
     throw new Error('computeGpElo requires unique playerIds')
   }
 
-  const { k, marginWeight = MARGIN_WEIGHT } = options
+  const { k, marginWeight = MARGIN_WEIGHT, races = DEFAULT_RACES } = options
+  if (!isValidRaceCount(races)) {
+    throw new Error(`computeGpElo requires a whole number of races from ${MIN_RACES} to ${MAX_RACES}`)
+  }
+  const pointsSpread = pointsSpreadFor(races)
   const n = participants.length
   const bonuses = placementBonuses(participants)
 
@@ -196,7 +245,7 @@ export function computeGpElo(
       // actualScore (who out-scored whom, and by how much) alone decides the
       // credit. Still exactly zero-sum before rounding: 0.5 + 0.5 = 1, same
       // as actualScore(a,b) + actualScore(b,a) = 1.
-      sum += actualScore(player.points, opponent.points, marginWeight) - 0.5
+      sum += actualScore(player.points, opponent.points, marginWeight, pointsSpread) - 0.5
     }
 
     // Each player uses their own K, so a provisional player can move further
@@ -258,11 +307,13 @@ export function pairwiseEloExchange(
 ): number {
   if (fieldSize < 2) throw new Error('pairwiseEloExchange requires a field of at least 2')
 
-  const { k, marginWeight = MARGIN_WEIGHT } = options
+  const { k, marginWeight = MARGIN_WEIGHT, races = DEFAULT_RACES } = options
   const playerK = k ?? kFactorFor(player.gpCount)
+  const pointsSpread = pointsSpreadFor(races)
 
   return (
-    (playerK / (fieldSize - 1)) * (actualScore(player.points, opponent.points, marginWeight) - 0.5) +
+    (playerK / (fieldSize - 1)) *
+      (actualScore(player.points, opponent.points, marginWeight, pointsSpread) - 0.5) +
     player.placementBonus / (fieldSize - 1)
   )
 }

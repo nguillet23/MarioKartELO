@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { pointsPerRace } from '../lib/elo'
 import { rosterFromHistory, formatGpDate, type GrandPrix } from '../lib/history'
 import { loadHistory } from '../lib/loadHistory'
 import { headToHead, opponentRecords } from '../lib/stats'
@@ -341,10 +342,15 @@ export default function HeadToHead() {
                         : 'text-haze'
                   }
                 />
-                <Stat label="Points for" value={`${record.pointsFor}`} />
+                {/* Per race, over every race they shared: GPs can differ in length,
+                    so a raw sum would just reward having met in longer ones. */}
                 <Stat
-                  label="Points against"
-                  value={`${record.pointsAgainst}`}
+                  label="Pts/race for"
+                  value={pointsPerRace(record.pointsFor, record.races).toFixed(2)}
+                />
+                <Stat
+                  label="Pts/race against"
+                  value={pointsPerRace(record.pointsAgainst, record.races).toFixed(2)}
                 />
               </div>
 
@@ -379,6 +385,7 @@ export default function HeadToHead() {
                         <span className={!won && !tied ? 'text-boost' : 'text-chalk'}>
                           {meeting.opponentPoints}
                         </span>
+                        <span className="ml-3 text-xs text-haze">{meeting.races} races</span>
                       </span>
                       <span
                         className={`shrink-0 font-mono text-xs ${

@@ -12,7 +12,8 @@ import {
 } from 'recharts'
 import { supabase } from '../lib/supabaseClient'
 import { loadHistory } from '../lib/loadHistory'
-import { windowHistory, WINDOW_OPTIONS, type StatsWindow } from '../lib/stats'
+import { pointsPerRace } from '../lib/elo'
+import { pointsTotalsByPlayer, windowHistory, WINDOW_OPTIONS, type StatsWindow } from '../lib/stats'
 import { RACER_COLORS } from '../lib/palette'
 import type { GrandPrix } from '../lib/history'
 import PageHeader from '../components/PageHeader'
@@ -26,7 +27,6 @@ interface PlayerStatsRow {
   elo: number
   gp_count: number
   total_points: number
-  avg_points: number
 }
 
 interface PlayerRaw {
@@ -89,20 +89,6 @@ function buildChartData(history: GrandPrix[], knownPlayerIds: Set<string>) {
   })
 
   return { eloRows, rankRows }
-}
-
-/** Total and average points per player within a slice of history — the windowed stand-ins for `player_stats`'s all-time total_points/avg_points. */
-function windowedPointsByPlayer(history: GrandPrix[]): Map<string, { points: number; gpCount: number }> {
-  const totals = new Map<string, { points: number; gpCount: number }>()
-  for (const gp of history) {
-    for (const entry of gp.entries) {
-      const row = totals.get(entry.playerId) ?? { points: 0, gpCount: 0 }
-      row.points += entry.points
-      row.gpCount += 1
-      totals.set(entry.playerId, row)
-    }
-  }
-  return totals
 }
 
 /**
@@ -200,7 +186,7 @@ export default function Analytics() {
 
   async function loadData() {
     const [statsRes, playersRes] = await Promise.all([
-      supabase.from('player_stats').select('id, name, elo, gp_count, total_points, avg_points'),
+      supabase.from('player_stats').select('id, name, elo, gp_count, total_points'),
       supabase.from('players').select('id, name').gt('gp_count', 0).order('name'),
     ])
 
@@ -255,7 +241,7 @@ export default function Analytics() {
   const chartRows = mode === 'elo' ? eloRows : rankRows
   const maxRank = players.length
 
-  const windowedPoints = useMemo(() => windowedPointsByPlayer(windowedHistory), [windowedHistory])
+  const windowedPoints = useMemo(() => pointsTotalsByPlayer(windowedHistory), [windowedHistory])
   const isWindowed = statsWindow.kind !== 'all'
 
   const modeButtonClass = (active: boolean) =>
@@ -415,18 +401,19 @@ export default function Analytics() {
               ).sort((a, b) => b.value - a.value)}
               formatValue={(v) => `${v}`}
             />
+            {/* Per race, not per GP: GPs can differ in length, and the `player_stats`
+                view's avg_points divides by GP count without knowing that. Computed
+                from history for every window, all-time included. */}
             <MiniLeaderboard
-              title="Points per GP"
-              rows={(isWindowed
-                ? players
-                    .map((p) => {
-                      const row = windowedPoints.get(p.id)
-                      return { id: p.id, name: p.name, value: row ? row.points / row.gpCount : 0 }
-                    })
-                    .filter((r) => r.value > 0)
-                : stats.map((s) => ({ id: s.id, name: s.name, value: s.avg_points }))
-              ).sort((a, b) => b.value - a.value)}
-              formatValue={(v) => Number(v).toFixed(1)}
+              title="Points per race"
+              rows={players
+                .map((p) => {
+                  const row = windowedPoints.get(p.id)
+                  return { id: p.id, name: p.name, value: row ? pointsPerRace(row.points, row.races) : 0 }
+                })
+                .filter((r) => r.value > 0)
+                .sort((a, b) => b.value - a.value)}
+              formatValue={(v) => Number(v).toFixed(2)}
             />
           </div>
         </>

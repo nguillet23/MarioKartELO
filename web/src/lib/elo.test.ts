@@ -3,8 +3,15 @@ import {
   actualScore,
   computeGpElo,
   DEFAULT_K,
+  isValidRaceCount,
   kFactorFor,
+  maxGpPoints,
+  MAX_RACES,
+  minGpPoints,
   MIN_ELO,
+  MIN_RACES,
+  pairwiseEloExchange,
+  pointsSpreadFor,
   PLACEMENT_BONUS_UNIT,
   placementBonuses,
   PROVISIONAL_GP_COUNT,
@@ -392,5 +399,83 @@ describe('the rating floor', () => {
       expect(update.eloAfter).toBe(update.eloBefore + update.eloDelta)
       expect(update.eloAfter).toBeGreaterThan(MIN_ELO)
     }
+  })
+})
+
+describe('races per grand prix', () => {
+  it('derives the 4..60 point range for the default 4 races', () => {
+    expect(minGpPoints(4)).toBe(4)
+    expect(maxGpPoints(4)).toBe(60)
+    expect(pointsSpreadFor(4)).toBe(56)
+  })
+
+  it('scales the point range with the race count', () => {
+    expect(minGpPoints(2 * MIN_RACES)).toBe(8)
+    expect(maxGpPoints(10)).toBe(150)
+    expect(pointsSpreadFor(10)).toBe(140)
+    expect(maxGpPoints(MAX_RACES)).toBe(720)
+  })
+
+  it('accepts whole race counts inside the range and rejects everything else', () => {
+    expect(isValidRaceCount(MIN_RACES)).toBe(true)
+    expect(isValidRaceCount(MAX_RACES)).toBe(true)
+    expect(isValidRaceCount(MIN_RACES - 1)).toBe(false)
+    expect(isValidRaceCount(MAX_RACES + 1)).toBe(false)
+    expect(isValidRaceCount(6.5)).toBe(false)
+    expect(isValidRaceCount(Number.NaN)).toBe(false)
+  })
+
+  it('defaults to 4 races, so omitting races changes nothing', () => {
+    const field = [settled('a', 100, 60), settled('b', 100, 30), settled('c', 100, 20), settled('d', 100, 4)]
+    expect(computeGpElo(field, { races: 4 })).toEqual(computeGpElo(field))
+    expect(actualScore(40, 20, 0.5, pointsSpreadFor(4))).toBe(actualScore(40, 20))
+  })
+
+  it('measures the same point gap as a smaller margin over a longer GP', () => {
+    // 10 points clear is a lot over 4 races (spread 56) and little over 20 (spread 280).
+    const shortGp = actualScore(40, 30, 0.5, pointsSpreadFor(4))
+    const longGp = actualScore(40, 30, 0.5, pointsSpreadFor(20))
+    expect(shortGp).toBeGreaterThan(longGp)
+    expect(longGp).toBeGreaterThan(0.75)
+  })
+
+  it('gives a full win for sweeping the whole spread at any race count', () => {
+    for (const races of [4, 10, 48]) {
+      expect(actualScore(maxGpPoints(races), minGpPoints(races), 0.5, pointsSpreadFor(races))).toBeCloseTo(1, 10)
+    }
+  })
+
+  it('stays zero-sum for settled players at a non-default race count', () => {
+    const field = [
+      settled('a', 100, 120),
+      settled('b', 100, 80),
+      settled('c', 100, 60),
+      settled('d', 100, 20),
+    ]
+    const total = computeGpElo(field, { races: 10 }).reduce((sum, u) => sum + u.eloDelta, 0)
+    expect(Math.abs(total)).toBeLessThanOrEqual(2)
+  })
+
+  it('moves ratings less for the same points gap in a longer GP', () => {
+    const at = (races: number) =>
+      computeGpElo(
+        [settled('a', 100, 40), settled('b', 100, 30), settled('c', 100, 20), settled('d', 100, 10)],
+        { races },
+      ).find((u) => u.playerId === 'a')!.eloDelta
+    expect(at(4)).toBeGreaterThan(at(20))
+  })
+
+  it('throws for an out-of-range or fractional race count', () => {
+    const field = [settled('a', 100, 40), settled('b', 100, 30), settled('c', 100, 20), settled('d', 100, 10)]
+    expect(() => computeGpElo(field, { races: MIN_RACES - 1 })).toThrow()
+    expect(() => computeGpElo(field, { races: MAX_RACES + 1 })).toThrow()
+    expect(() => computeGpElo(field, { races: 4.5 })).toThrow()
+  })
+
+  it('threads races through the pairwise exchange the same way computeGpElo uses it', () => {
+    const player = { points: 40, gpCount: PROVISIONAL_GP_COUNT, placementBonus: 0 }
+    const tight = pairwiseEloExchange(player, { points: 30 }, 4, { races: 4 })
+    const loose = pairwiseEloExchange(player, { points: 30 }, 4, { races: 20 })
+    expect(tight).toBeGreaterThan(loose)
   })
 })

@@ -14,7 +14,7 @@ export async function loadHistory(): Promise<GrandPrix[]> {
   const { data, error } = await supabase
     .from('gp_results')
     .select(
-      'grand_prix_id, player_id, points, elo_before, elo_after, elo_delta, grand_prix(played_at), players(name)',
+      'grand_prix_id, player_id, points, elo_before, elo_after, elo_delta, grand_prix(played_at, races), players(name)',
     )
 
   if (error) throw new Error(error.message)

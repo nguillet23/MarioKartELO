@@ -39,7 +39,9 @@ export function replayHistory(history: GrandPrix[], options: EloOptions = {}): R
       gpCount: gpCount.get(entry.playerId) ?? 0,
     }))
 
-    const updates = computeGpElo(participants, options)
+    // Each GP is rated against its own race count, so a replay over a mix of
+    // short and long GPs uses the same margin spread `submit_gp` did originally.
+    const updates = computeGpElo(participants, { ...options, races: gp.races })
     const byId = new Map(updates.map((u) => [u.playerId, u]))
 
     for (const update of updates) {

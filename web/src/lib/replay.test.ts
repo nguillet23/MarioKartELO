@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { computeGpElo, STARTING_ELO } from './elo'
+import { computeGpElo, DEFAULT_RACES, STARTING_ELO } from './elo'
 import { groupIntoGrandPrix, type GrandPrix } from './history'
 import { replayHistory } from './replay'
 
 interface GpSpec {
   field: [string, number][]
+  /** Races the GP's points were summed over. Defaults to 4, the app's original fixed length. */
+  races?: number
 }
 
 /** Same replay-and-build pattern as stats.test.ts's makeHistory. */
@@ -19,7 +21,7 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
       rating: ratings.get(playerId) ?? STARTING_ELO,
       gpCount: gpCounts.get(playerId) ?? 0,
     }))
-    const updates = computeGpElo(participants)
+    const updates = computeGpElo(participants, { races: spec.races })
 
     for (const update of updates) {
       ratings.set(update.playerId, update.eloAfter)
@@ -33,7 +35,10 @@ function makeHistory(specs: GpSpec[]): GrandPrix[] {
       elo_before: updates[i].eloBefore,
       elo_after: updates[i].eloAfter,
       elo_delta: updates[i].eloDelta,
-      grand_prix: { played_at: `2026-01-${String(index + 1).padStart(2, '0')}T20:00:00Z` },
+      grand_prix: {
+        played_at: `2026-01-${String(index + 1).padStart(2, '0')}T20:00:00Z`,
+        races: spec.races ?? DEFAULT_RACES,
+      },
       players: { name: p.playerId.toUpperCase() },
     }))
   })
@@ -64,6 +69,36 @@ describe('replayHistory', () => {
     for (const entry of last.entries) {
       expect(finalRatings.get(entry.playerId)).toBe(entry.eloAfter)
     }
+  })
+
+  it('reproduces the stored ratings exactly across a mix of GP lengths', () => {
+    const history = makeHistory([
+      { field: [['a', 60], ['b', 30], ['c', 20], ['d', 4]] },
+      { races: 10, field: [['a', 60], ['b', 110], ['c', 75], ['d', 20]] },
+      { races: 8, field: [['a', 90], ['b', 40], ['c', 60], ['d', 25]] },
+      { races: 48, field: [['a', 400], ['b', 350], ['c', 500], ['d', 100]] },
+    ])
+    const { finalRatings, history: replayed } = replayHistory(history)
+
+    expect(replayed.map((gp) => gp.races)).toEqual([4, 10, 8, 48])
+    for (const entry of history[history.length - 1].entries) {
+      expect(finalRatings.get(entry.playerId)).toBe(entry.eloAfter)
+    }
+  })
+
+  it("rates each GP against its own race count, not the default's", () => {
+    // Same points on the page, different length: only threading `races` through
+    // to computeGpElo can make these two replays disagree.
+    const field: [string, number][] = [['a', 60], ['b', 30], ['c', 20], ['d', 10]]
+    const short = replayHistory(makeHistory([{ races: 4, field }]))
+    const storedLong = makeHistory([{ races: 20, field }])
+    const long = replayHistory(storedLong)
+
+    expect(short.finalRatings.get('a')).not.toBe(long.finalRatings.get('a'))
+    // ...and replaying the long GP has to land on the rating it was stored with.
+    expect(long.finalRatings.get('a')).toBe(
+      storedLong[0].entries.find((e) => e.playerId === 'a')!.eloAfter,
+    )
   })
 
   it('leaves points and rank untouched, only recomputing rating', () => {
